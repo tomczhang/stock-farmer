@@ -1,0 +1,147 @@
+name: pipeline
+
+# 离线数据流水线：每个交易日盘后跑一次，拉取 HK / US 股票数据，
+# 计算 PE-TTM 与历史分位，写入 Cloudflare D1。
+#
+# 调度策略（见 openspec/changes/add-pe-percentile-viewer/design.md 决策 3）：
+#   - 港股 cron：UTC 08:30 = HKT 16:30（盘后半小时给数据源刷新缓冲）
+#   - 美股 cron：UTC 21:30 = EST 16:30（标准时；夏令时差 1 小时，MVP 可接受）
+#
+# 失败通知：默认 GitHub Actions 失败会邮件通知 workflow 所有者。
+# pipeline 内部对单只股票失败采取"跳过 + 记日志"策略；
+# 当批次失败率 > 10% 时由 pipeline/run.py 自身退出码 1 触发告警。
+
+on:
+  schedule:
+    # 港股盘后（HKT 16:30 = UTC 08:30），工作日
+    - cron: '30 8 * * 1-5'
+    # 美股盘后（EST 16:30 = UTC 21:30），工作日
+    - cron: '30 21 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      market:
+        description: '目标市场（us / hk / all）'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - us
+          - hk
+      ticker:
+        description: '仅跑这一只 ticker（如 AAPL 或 0700.HK），留空跑 watchlist 全量'
+        required: false
+        type: string
+        default: ''
+      force_full_refresh:
+        description: '强制全量重拉（忽略 fetch_log 增量断点）'
+        required: false
+        type: boolean
+        default: false
+
+# 同一 market 同时只允许跑一份，避免并发写 D1 冲突。
+concurrency:
+  group: pipeline-${{ github.event.schedule || inputs.market }}
+  cancel-in-progress: false
+
+jobs:
+  pipeline-hk:
+    name: Pipeline (HK)
+    # 触发条件：
+    #   - schedule 命中港股 cron，或
+    #   - workflow_dispatch 选了 hk / all
+    if: >-
+      github.event.schedule == '30 8 * * 1-5'
+      || (github.event_name == 'workflow_dispatch' && (inputs.market == 'hk' || inputs.market == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pipeline/requirements.txt
+
+      - name: Install pipeline dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Install global-stock-data skill
+        run: |
+          mkdir -p ~/.claude/skills/global-stock-data
+          curl -fsSL -o ~/.claude/skills/global-stock-data/SKILL.md \
+            https://raw.githubusercontent.com/simonlin1212/global-stock-data/main/SKILL.md
+
+      - name: Run pipeline (HK)
+        run: |
+          ARGS="--market=hk"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ inputs.ticker }}" ]; then
+              ARGS="$ARGS --ticker=${{ inputs.ticker }}"
+            fi
+            if [ "${{ inputs.force_full_refresh }}" = "true" ]; then
+              ARGS="$ARGS --force-full-refresh"
+            fi
+          fi
+          echo "Running: python pipeline/run.py $ARGS"
+          python pipeline/run.py $ARGS
+
+  pipeline-us:
+    name: Pipeline (US)
+    # 触发条件：
+    #   - schedule 命中美股 cron，或
+    #   - workflow_dispatch 选了 us / all
+    if: >-
+      github.event.schedule == '30 21 * * 1-5'
+      || (github.event_name == 'workflow_dispatch' && (inputs.market == 'us' || inputs.market == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pipeline/requirements.txt
+
+      - name: Install pipeline dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Install global-stock-data skill
+        run: |
+          mkdir -p ~/.claude/skills/global-stock-data
+          curl -fsSL -o ~/.claude/skills/global-stock-data/SKILL.md \
+            https://raw.githubusercontent.com/simonlin1212/global-stock-data/main/SKILL.md
+
+      - name: Run pipeline (US)
+        run: |
+          ARGS="--market=us"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ inputs.ticker }}" ]; then
+              ARGS="$ARGS --ticker=${{ inputs.ticker }}"
+            fi
+            if [ "${{ inputs.force_full_refresh }}" = "true" ]; then
+              ARGS="$ARGS --force-full-refresh"
+            fi
+          fi
+          echo "Running: python pipeline/run.py $ARGS"
+          python pipeline/run.py $ARGS

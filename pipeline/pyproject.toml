@@ -1,0 +1,30 @@
+[project]
+name = "stock-farmer-pipeline"
+version = "0.1.0"
+description = "Offline batch pipeline for stock-farmer: fetch HK/US stock data, compute PE-TTM and historical percentiles, write to Cloudflare D1."
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "requests>=2.32",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "responses>=0.25",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fetcher*", "compute*", "db*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

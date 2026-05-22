@@ -1,0 +1,21 @@
+name = "stock-farmer-api"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# CORS allow-list — Pages 域名将在首次部署后追加进来。
+[vars]
+ALLOWED_ORIGINS = "http://localhost:5173,https://stock-farmer.pages.dev"
+
+# 生产 D1（实际 database_id 由 `wrangler d1 create stock-farmer` 输出后填入）
+[[d1_databases]]
+binding = "DB"
+database_name = "stock-farmer"
+database_id = "REPLACE_WITH_PRODUCTION_DATABASE_ID"
+
+# 本地 / preview 环境用同一份 binding（wrangler 会自动 fork 本地副本）
+[env.preview]
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "stock-farmer-preview"
+database_id = "REPLACE_WITH_PREVIEW_DATABASE_ID"
