@@ -1,0 +1,57 @@
+"""综述文本生成（模板拼接，非 LLM）。"""
+from __future__ import annotations
+
+from .phase import PhaseResult
+from .signals import SignalResult
+
+
+def generate_narrative(
+    ticker: str,
+    name: str,
+    signals: list[SignalResult],
+    phase: PhaseResult,
+) -> str:
+    left = [s for s in signals if s.category == "left"]
+    right = [s for s in signals if s.category == "right"]
+    left_green = [s for s in left if s.light == "green"]
+    right_green = [s for s in right if s.light == "green"]
+    left_yellow = [s for s in left if s.light == "yellow"]
+    right_yellow = [s for s in right if s.light == "yellow"]
+
+    # 第一句：当前阶段
+    phase_desc = {
+        "仍在下跌": "仍处于下跌趋势中，尚未出现有效的底部信号",
+        "底部特征初现": "开始出现初步的底部特征，但信号尚不充分",
+        "底部基本成型": "呈现较为明确的筑底特征，底部信号基本充分",
+        "右侧初步确认": "已初步确认右侧趋势反转，多个确认信号出现",
+        "趋势已确立": "趋势已基本确立，左右侧信号充分一致",
+    }
+    sent1 = f"{ticker} ({name}) 当前{phase_desc.get(phase.phase, '状态待定')}。"
+
+    # 第二句：左侧信号概述
+    if left_green:
+        green_names = "、".join(s.name for s in left_green[:3])
+        sent2 = f"左侧信号方面，{green_names}等 {len(left_green)} 项信号确认，"
+        if left_yellow:
+            sent2 += f"另有 {len(left_yellow)} 项在酝酿中。"
+        else:
+            sent2 += "底部特征较为充分。"
+    elif left_yellow:
+        sent2 = f"左侧信号方面，有 {len(left_yellow)} 项信号出现迹象但均未确认。"
+    else:
+        sent2 = "左侧信号方面，暂未出现明显的底部特征。"
+
+    # 第三句：右侧信号概述
+    if right_green:
+        green_names = "、".join(s.name for s in right_green[:3])
+        sent3 = f"右侧确认方面，{green_names}已触发，趋势反转信号较强。"
+    elif right_yellow:
+        yellow_names = "、".join(s.name for s in right_yellow[:2])
+        sent3 = f"右侧确认方面，{yellow_names}正在酝酿但尚未确认。"
+    else:
+        sent3 = "右侧确认信号尚未出现，需等待趋势反转信号。"
+
+    # 第四句：操作建议 + 触发条件
+    sent4 = f"建议：{phase.action}。{phase.trigger}。"
+
+    return f"{sent1}{sent2}{sent3}{sent4}"
