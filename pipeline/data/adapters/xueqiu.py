@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,6 +13,8 @@ import pandas as pd
 import requests
 
 from ..types import AdapterError, Quote, market_of
+
+_LOG = logging.getLogger(__name__)
 
 _XUEQIU_HOME = "https://xueqiu.com"
 _XUEQIU_KLINE = "https://stock.xueqiu.com/v5/stock/chart/kline.json"
@@ -34,9 +37,12 @@ class _CookieHolder:
             s.trust_env = False
             s.headers.update({
                 "User-Agent": _UA,
-                "Accept": "application/json, text/plain, */*",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             })
-            s.get(_XUEQIU_HOME, timeout=15)
+            r = s.get(_XUEQIU_HOME, timeout=15)
+            _LOG.info("xueqiu cookie fetch: status=%d cookies=%d", r.status_code, len(s.cookies))
+            s.headers["Accept"] = "application/json, text/plain, */*"
             self._session = s
         return self._session
 
