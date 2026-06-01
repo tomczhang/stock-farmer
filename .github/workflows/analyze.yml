@@ -15,6 +15,9 @@ concurrency:
   group: analyze-${{ github.event.inputs.ticker || github.event.client_payload.ticker || 'default' }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   analyze:
     name: Analyze ${{ github.event.inputs.ticker || github.event.client_payload.ticker }}
