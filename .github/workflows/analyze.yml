@@ -1,0 +1,82 @@
+name: analyze
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: '股票代码（如 AAPL、0700.HK、9992.HK）'
+        required: true
+        type: string
+
+  repository_dispatch:
+    types: [analyze]
+
+concurrency:
+  group: analyze-${{ github.event.inputs.ticker || github.event.client_payload.ticker || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ github.event.inputs.ticker || github.event.client_payload.ticker }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pipeline/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Determine ticker
+        id: ticker
+        run: |
+          TICKER="${{ github.event.inputs.ticker || github.event.client_payload.ticker }}"
+          echo "value=$TICKER" >> "$GITHUB_OUTPUT"
+          echo "Analyzing: $TICKER"
+
+      - name: Run analysis
+        working-directory: pipeline
+        run: python analyze.py "${{ steps.ticker.outputs.value }}" --output-dir "${{ github.workspace }}/_site/reports"
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: _gh-pages
+
+      - name: Merge reports
+        run: |
+          mkdir -p _gh-pages/reports
+          cp _site/reports/*.html _gh-pages/reports/ 2>/dev/null || true
+
+          # Update index.json
+          cd _gh-pages/reports
+          echo '[' > index.json.tmp
+          FIRST=true
+          for f in *.html; do
+            [ "$f" = "*.html" ] && break
+            TICKER=$(echo "$f" | sed 's/_[0-9]*\.html//')
+            DATE=$(echo "$f" | sed 's/.*_\([0-9]*\)\.html/\1/')
+            if [ "$FIRST" = true ]; then FIRST=false; else echo ',' >> index.json.tmp; fi
+            echo "  {\"ticker\": \"$TICKER\", \"date\": \"$DATE\", \"file\": \"$f\"}" >> index.json.tmp
+          done
+          echo ']' >> index.json.tmp
+          mv index.json.tmp index.json
+
+      - name: Deploy to gh-pages
+        run: |
+          cd _gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "Update report: ${{ steps.ticker.outputs.value }}"
+          git push
