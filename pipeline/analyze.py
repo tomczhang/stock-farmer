@@ -14,7 +14,7 @@ from analyzer.narrative import generate_narrative
 from analyzer.renderer import render_html
 
 
-def analyze(ticker: str) -> str:
+def analyze(ticker: str, output_dir: str | None = None) -> str:
     """运行完整分析流程，返回生成的 HTML 文件路径。"""
     from data import get_klines, get_quotes, get_volume_profile
 
@@ -60,10 +60,10 @@ def analyze(ticker: str) -> str:
     html = render_html(ticker, name, price, change_pct, signals, phase, narrative)
 
     # 保存
-    output_dir = Path(__file__).parent / "output"
-    output_dir.mkdir(exist_ok=True)
+    out = Path(output_dir) if output_dir else Path(__file__).parent / "output"
+    out.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y%m%d")
-    output_path = output_dir / f"{ticker}_{date_str}.html"
+    output_path = out / f"{ticker}_{date_str}.html"
     output_path.write_text(html, encoding="utf-8")
 
     print(f"\n✓ 报告已生成: {output_path}")
