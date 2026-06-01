@@ -56,8 +56,15 @@ def analyze(ticker: str, output_dir: str | None = None) -> str:
     change_pct = quote.change_pct if quote else None
     narrative = generate_narrative(ticker, name, signals, phase)
 
+    # 准备图表数据
+    chart_data = {
+        "klines": df.to_dict("records") if len(df) > 0 else [],
+        "index_klines": index_df[["date", "close"]].to_dict("records") if index_df is not None and len(index_df) > 0 else [],
+        "volume_profile": [{"price_level": b.price_level, "volume": b.volume, "pct": b.pct} for b in vp] if vp else [],
+    }
+
     # 渲染 HTML
-    html = render_html(ticker, name, price, change_pct, signals, phase, narrative)
+    html = render_html(ticker, name, price, change_pct, signals, phase, narrative, chart_data=chart_data)
 
     # 保存
     out = Path(output_dir) if output_dir else Path(__file__).parent / "output"
