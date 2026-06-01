@@ -187,15 +187,20 @@ def render_html(
     function createChart(containerId) {{
       const el = document.getElementById(containerId);
       if (!el) return null;
-      return LightweightCharts.createChart(el, {{
-        width: el.clientWidth,
+      const w = el.clientWidth || el.parentElement.clientWidth || 600;
+      const chart = LightweightCharts.createChart(el, {{
+        width: w,
         height: 160,
-        layout: {{ background: {{ color: '#0f1117' }}, textColor: '#9ca3af' }},
-        grid: {{ vertLines: {{ color: '#1f2937' }}, horzLines: {{ color: '#1f2937' }} }},
+        layout: {{ background: {{ color: '#141820' }}, textColor: '#9ca3af' }},
+        grid: {{ vertLines: {{ color: '#1f293744' }}, horzLines: {{ color: '#1f293744' }} }},
         crosshair: {{ mode: 0 }},
         rightPriceScale: {{ borderColor: '#374151' }},
         timeScale: {{ borderColor: '#374151', timeVisible: false }},
+        handleScroll: false,
+        handleScale: false,
       }});
+      new ResizeObserver(() => chart.applyOptions({{ width: el.clientWidth }})).observe(el);
+      return chart;
     }}
 
     function renderVolumeChart(id, klines) {{
@@ -365,7 +370,7 @@ def render_html(
       setTimeout(() => btn.textContent = '分析', 3000);
     }}
 
-    document.addEventListener('DOMContentLoaded', initCharts);
+    window.addEventListener('load', () => setTimeout(initCharts, 100));
   </script>
 </body>
 </html>"""
