@@ -35,13 +35,22 @@ _FQT_MAP = {"qfq": 1, "hfq": 2, "none": 0}
 # secid prefix: 105=NASDAQ, 106=NYSE, 107=US_ETF, 116=HK
 _PREFIX_DEFAULT = 105
 
+_SECID_OVERRIDES: dict[str, int] = {
+    "SPY": 107, "QQQ": 107, "IWM": 107, "DIA": 107, "VOO": 107,
+    "VTI": 107, "ARKK": 107, "XLF": 107, "XLE": 107, "GLD": 107,
+    "BABA": 106, "JD": 106, "NIO": 106, "PDD": 106, "TME": 106,
+    "BIDU": 106, "LI": 106, "ZTO": 106, "VIPS": 106,
+}
+
 
 def _to_secid(ticker: str) -> str:
     mkt = market_of(ticker)
     if mkt == "HK":
         digits = ticker.upper().replace(".HK", "").lstrip("0").zfill(5)
         return f"116.{digits}"
-    return f"{_PREFIX_DEFAULT}.{ticker.upper()}"
+    code = ticker.upper()
+    prefix = _SECID_OVERRIDES.get(code, _PREFIX_DEFAULT)
+    return f"{prefix}.{code}"
 
 
 def _session(proxy: str | None = None, timeout: int = 10) -> requests.Session:
@@ -50,6 +59,8 @@ def _session(proxy: str | None = None, timeout: int = 10) -> requests.Session:
     s.headers["User-Agent"] = _UA
     if proxy:
         s.proxies = {"http": proxy, "https": proxy}
+    else:
+        s.proxies = {"http": None, "https": None}
     return s
 
 
