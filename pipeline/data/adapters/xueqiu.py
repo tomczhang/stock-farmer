@@ -63,8 +63,8 @@ def _request(url: str, params: dict, symbol: str, timeout: int = 10) -> dict:
             headers={"Referer": f"{_XUEQIU_HOME}/S/{symbol}"},
             timeout=timeout,
         )
-        if r.status_code in (401, 403):
-            raise AdapterError("xueqiu", f"auth failed: HTTP {r.status_code}", r.status_code)
+        if r.status_code in (400, 401, 403):
+            raise AdapterError("xueqiu", f"HTTP {r.status_code}", r.status_code)
         r.raise_for_status()
         data = r.json()
         if data.get("error_code", 0) != 0:
@@ -73,7 +73,7 @@ def _request(url: str, params: dict, symbol: str, timeout: int = 10) -> dict:
 
     try:
         return _attempt()
-    except AdapterError:
+    except (AdapterError, requests.RequestException):
         _COOKIE.reset()
         try:
             return _attempt()
