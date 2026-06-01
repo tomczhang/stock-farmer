@@ -71,15 +71,14 @@ def analyze(ticker: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("用法: python analyze.py <TICKER>")
-        print("示例: python analyze.py AAPL")
-        print("      python analyze.py 0700.HK")
-        return 1
+    import argparse
+    parser = argparse.ArgumentParser(description="股票信号分析")
+    parser.add_argument("ticker", help="股票代码（如 AAPL、0700.HK）")
+    parser.add_argument("--output-dir", help="输出目录（默认 pipeline/output/）")
+    args = parser.parse_args()
 
-    ticker = sys.argv[1]
     try:
-        analyze(ticker)
+        analyze(args.ticker, output_dir=args.output_dir)
         return 0
     except Exception as e:
         print(f"\n✗ 分析失败: {type(e).__name__}: {e}", file=sys.stderr)
