@@ -1,6 +1,11 @@
-"""Yahoo Finance chart v8 adapter — K 线 fallback。"""
+"""Yahoo Finance adapter — K 线 fallback。
+
+优先用 yfinance 库（更稳定，自动处理 cookie/crumb），
+fallback 到直接调 chart v8 API。
+"""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -8,6 +13,8 @@ import pandas as pd
 import requests
 
 from ..types import AdapterError, to_yahoo
+
+_LOG = logging.getLogger(__name__)
 
 _CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
 _UA = (
@@ -52,6 +59,12 @@ def fetch_klines(
     interval = _PERIOD_TO_YAHOO_INTERVAL.get(period)
     if interval is None:
         raise AdapterError("yahoo", f"unsupported period: {period}")
+
+    # Try yfinance first (more robust, handles auth automatically)
+    try:
+        return _fetch_via_yfinance(symbol, interval, count, period)
+    except Exception as e:
+        _LOG.debug("yfinance failed, falling back to chart API: %s", e)
 
     range_ = _estimate_range(period, count)
     headers = {"User-Agent": _UA}
@@ -100,6 +113,34 @@ def fetch_klines(
         })
 
     df = pd.DataFrame(rows)
+    if count and len(df) > count:
+        df = df.tail(count).reset_index(drop=True)
+    return df
+
+
+def _fetch_via_yfinance(symbol: str, interval: str, count: int, period: str) -> pd.DataFrame:
+    """Use yfinance library for more robust Yahoo access."""
+    import yfinance as yf
+
+    range_ = _estimate_range(period, count)
+    tick = yf.Ticker(symbol)
+    hist = tick.history(period=range_, interval=interval)
+
+    if hist.empty:
+        raise RuntimeError(f"yfinance returned empty for {symbol}")
+
+    is_intraday = period in ("5m", "15m", "30m", "60m")
+    fmt = "%Y-%m-%d %H:%M" if is_intraday else "%Y-%m-%d"
+
+    df = pd.DataFrame({
+        "date": hist.index.strftime(fmt),
+        "open": hist["Open"].values,
+        "high": hist["High"].values,
+        "low": hist["Low"].values,
+        "close": hist["Close"].values,
+        "volume": hist["Volume"].values.astype(int),
+    })
+
     if count and len(df) > count:
         df = df.tail(count).reset_index(drop=True)
     return df
