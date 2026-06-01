@@ -133,9 +133,9 @@ PROXY_COOLDOWN_SECONDS = 120
 PROXY_REFRESH_INTERVAL = 300  # 5 minutes
 
 SOURCE_PRIORITY: dict[str, list[str]] = {
-    "quote": ["eastmoney", "sina"],
-    "kline_daily": ["eastmoney", "yahoo", "sina"],
-    "kline_minute": ["eastmoney"],
+    "quote": ["eastmoney", "xueqiu", "sina"],
+    "kline_daily": ["eastmoney", "xueqiu", "yahoo", "sina"],
+    "kline_minute": ["eastmoney", "xueqiu"],
     "pe_ttm": ["xueqiu"],
     "money_flow": ["eastmoney"],
 }

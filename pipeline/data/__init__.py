@@ -45,6 +45,7 @@ def get_quotes(tickers: list[str]) -> list[Quote]:
         "quote",
         {
             "eastmoney": lambda timeout, **_: eastmoney.fetch_quotes(normalized, timeout=timeout),
+            "xueqiu": lambda timeout, **_: xueqiu.fetch_quotes(normalized, timeout=timeout),
             "sina": lambda timeout, **_: sina.fetch_quotes(normalized, timeout=timeout),
         },
     )
@@ -70,8 +71,14 @@ def get_klines(
         adapters["eastmoney"] = lambda timeout, **_: eastmoney.fetch_klines(
             t, period=period, count=count, adjust=adjust, timeout=timeout, proxy=proxy,
         )
+        adapters["xueqiu"] = lambda timeout, **_: xueqiu.fetch_klines(
+            t, period=period, count=count, adjust=adjust, timeout=timeout,
+        )
     else:
         adapters["eastmoney"] = lambda timeout, **_: eastmoney.fetch_klines(
+            t, period=period, count=count, adjust=adjust, timeout=timeout,
+        )
+        adapters["xueqiu"] = lambda timeout, **_: xueqiu.fetch_klines(
             t, period=period, count=count, adjust=adjust, timeout=timeout,
         )
         adapters["yahoo"] = lambda timeout, **_: yahoo.fetch_klines(
