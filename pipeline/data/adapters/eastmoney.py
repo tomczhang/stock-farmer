@@ -10,6 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import json as _json
+import ssl
+import urllib.request
+from urllib.parse import urlencode
+
 import pandas as pd
 import requests
 
@@ -64,6 +69,32 @@ def _session(proxy: str | None = None, timeout: int = 10) -> requests.Session:
     return s
 
 
+_SSL_CTX = ssl.create_default_context()
+
+
+def _get_json(url: str, params: dict, timeout: int = 10) -> dict:
+    """fallback — 先试 urllib，再试 curl。"""
+    full_url = f"{url}?{urlencode(params)}"
+    req = urllib.request.Request(full_url, headers={"User-Agent": _UA})
+    try:
+        with urllib.request.urlopen(req, context=_SSL_CTX, timeout=timeout) as resp:
+            return _json.loads(resp.read())
+    except Exception:
+        pass
+    # curl fallback
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "--max-time", str(timeout), "-H", f"User-Agent: {_UA}", full_url],
+            capture_output=True, text=True, timeout=timeout + 5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return _json.loads(result.stdout)
+    except Exception:
+        pass
+    raise AdapterError("eastmoney", f"all transports failed for {url}")
+
+
 # ---------- 实时行情 ----------
 
 def fetch_quotes(
@@ -81,14 +112,15 @@ def fetch_quotes(
         "fields": "f2,f3,f4,f5,f6,f7,f12,f13,f14,f15,f16,f17,f18",
         "fltt": 2,
     }
-    s = _session(proxy, timeout)
     try:
+        s = _session(proxy, timeout)
         r = s.get(_PUSH2_BATCH, params=params, timeout=timeout)
         r.raise_for_status()
-    except requests.RequestException as e:
-        raise AdapterError("eastmoney", str(e)) from e
+        resp_data = r.json()
+    except requests.RequestException:
+        resp_data = _get_json(_PUSH2_BATCH, params, timeout)
 
-    data = r.json().get("data")
+    data = resp_data.get("data")
     if not data:
         raise AdapterError("eastmoney", "empty response from ulist.np")
 
@@ -148,14 +180,15 @@ def fetch_klines(
         "rtntype": "6",
     }
 
-    s = _session(proxy, timeout)
     try:
+        s = _session(proxy, timeout)
         r = s.get(_PUSH2HIS_KLINE, params=params, timeout=timeout)
         r.raise_for_status()
-    except requests.RequestException as e:
-        raise AdapterError("eastmoney", str(e)) from e
+        resp_data = r.json()
+    except requests.RequestException:
+        resp_data = _get_json(_PUSH2HIS_KLINE, params, timeout)
 
-    data = r.json().get("data", {})
+    data = resp_data.get("data", {})
     klines = data.get("klines", [])
     if not klines:
         raise AdapterError("eastmoney", f"no kline data for {ticker} period={period}")
@@ -196,14 +229,15 @@ def fetch_money_flow(
         "fields1": "f1,f2,f3,f7",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
     }
-    s = _session(proxy, timeout)
     try:
+        s = _session(proxy, timeout)
         r = s.get(_PUSH2HIS_FLOW, params=params, timeout=timeout)
         r.raise_for_status()
-    except requests.RequestException as e:
-        raise AdapterError("eastmoney", str(e)) from e
+        resp_data = r.json()
+    except requests.RequestException:
+        resp_data = _get_json(_PUSH2HIS_FLOW, params, timeout)
 
-    data = r.json().get("data", {})
+    data = resp_data.get("data", {})
     klines = data.get("klines", [])
     out: list[MoneyFlowDay] = []
     for line in klines:

@@ -22,7 +22,7 @@ def analyze(ticker: str, output_dir: str | None = None) -> str:
 
     # 获取数据
     print("  拉取日K线...")
-    df = get_klines(ticker, period="1d", count=60)
+    df = get_klines(ticker, period="1d", count=120)
 
     print("  拉取实时行情...")
     try:

@@ -22,7 +22,9 @@ def generate_narrative(
     phase_desc = {
         "仍在下跌": "仍处于下跌趋势中，尚未出现有效的底部信号",
         "底部特征初现": "开始出现初步的底部特征，但信号尚不充分",
+        "底部初现+右侧确认": "底部特征初现的同时右侧信号已确认，出现信号共振",
         "底部基本成型": "呈现较为明确的筑底特征，底部信号基本充分",
+        "右侧强势突破": "左侧底部特征尚不充分，但右侧信号已强势突破，买方强力介入",
         "右侧初步确认": "已初步确认右侧趋势反转，多个确认信号出现",
         "趋势已确立": "趋势已基本确立，左右侧信号充分一致",
     }
@@ -51,7 +53,16 @@ def generate_narrative(
     else:
         sent3 = "右侧确认信号尚未出现，需等待趋势反转信号。"
 
+    # 第三句补充：左右侧矛盾时的解读
+    sent3b = ""
+    n_left_green = len(left_green)
+    n_right_green = len(right_green)
+    if n_right_green >= 3 and n_left_green <= 2:
+        sent3b = "值得注意的是，虽然左侧底部特征尚不充分，但买方已强力介入，右侧趋势反转信号明显——属于「未充分筑底即突破」的走势，需关注突破后能否站稳。"
+    elif n_left_green >= 3 and n_right_green == 0:
+        sent3b = "底部特征已较充分但右侧尚未确认，需耐心等待放量突破信号。"
+
     # 第四句：操作建议 + 触发条件
     sent4 = f"建议：{phase.action}。{phase.trigger}。"
 
-    return f"{sent1}{sent2}{sent3}{sent4}"
+    return f"{sent1}{sent2}{sent3}{sent3b}{sent4}"

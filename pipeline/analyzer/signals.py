@@ -36,30 +36,195 @@ def _to_light(confidence: float, thresholds: tuple[float, float]) -> str:
 # ---------- S1: 缩量下跌 ----------
 
 def _calc_vol_shrink(df: pd.DataFrame) -> SignalResult:
+    """缩量下跌 — 多维度递进评估：
+    1) 单日缩量：最近一个下跌日量 < MA20
+    2) 阶段缩量：近5-10个下跌日均量 < MA20
+    3) 明显缩量：下跌日均量 < MA20 的 80%
+    4) 趋势缩量：最近一轮下跌量能 < 上一轮下跌量能
+    5) 量价背离：股价创新低但成交量/OBV 不创新低
+    """
     thresholds = (0.35, 0.70)
+    closes = df["close"].values
     vol = df["volume"].values
-    if len(vol) < 20:
+    n = len(vol)
+    if n < 30:
         return SignalResult(
             id="vol_shrink", name="缩量下跌", category="left",
             confidence=0.0, light="red", thresholds=thresholds, weight=1,
             description="数据不足，无法判断", data={},
         )
-    vol5 = float(np.mean(vol[-5:]))
-    vol20 = float(np.mean(vol[-20:]))
-    ratio = vol5 / vol20 if vol20 > 0 else 1.0
-    conf = _clamp((1 - ratio) * 2.0)
 
-    if conf >= thresholds[1]:
-        desc = f"5日均量 = 20日均量的 {ratio*100:.0f}%，抛压明显减轻"
-    elif conf >= thresholds[0]:
-        desc = f"5日均量 = 20日均量的 {ratio*100:.0f}%，轻微缩量"
+    vol20 = float(np.mean(vol[-20:]))
+    if vol20 == 0:
+        vol20 = 1.0
+
+    # 收集所有下跌日（收盘 < 前日收盘）
+    down_indices = [i for i in range(1, n) if closes[i] < closes[i - 1]]
+
+    if not down_indices:
+        return SignalResult(
+            id="vol_shrink", name="缩量下跌", category="left",
+            confidence=0.0, light="red", thresholds=thresholds, weight=1,
+            description="无下跌日，无法判断",
+            data={"down_days": 0},
+        )
+
+    dates = df["date"].values
+
+    # --- 维度1: 单日缩量 — 最近一个下跌日量 vs MA20 ---
+    last_down_idx = down_indices[-1]
+    last_down_vol = float(vol[last_down_idx])
+    last_down_date = str(dates[last_down_idx])
+    single_ratio = last_down_vol / vol20
+    score_single = _clamp(1 - single_ratio) if single_ratio < 1 else 0.0
+
+    # --- 维度2+3: 阶段缩量 — 近5~10个下跌日均量 vs MA20 ---
+    recent_down_indices = [i for i in down_indices if i >= n - 10]
+    if not recent_down_indices:
+        recent_down_indices = [down_indices[-1]]
+    recent_down_vols = [float(vol[i]) for i in recent_down_indices]
+    avg_down_vol = float(np.mean(recent_down_vols))
+    stage_ratio = avg_down_vol / vol20
+    score_stage = _clamp(1 - stage_ratio) if stage_ratio < 1 else 0.0
+    score_obvious = _clamp((0.8 - stage_ratio) / 0.3) if stage_ratio < 0.8 else 0.0
+
+    # --- 维度4: 趋势缩量 — 用价格波峰/波谷划分下跌波段 ---
+    # 找局部极值点：3日窗口内的最高/最低点
+    highs_arr = df["high"].values
+    lows = df["low"].values
+    window = 3
+    swing_highs: list[int] = []
+    swing_lows: list[int] = []
+    for i in range(window, n - window):
+        if highs_arr[i] == max(highs_arr[i - window:i + window + 1]):
+            swing_highs.append(i)
+        if lows[i] == min(lows[i - window:i + window + 1]):
+            swing_lows.append(i)
+    # 边界处理：检查最后 window 天内是否有低点/高点
+    tail_start = max(n - window, window)
+    tail_low_idx = tail_start + int(np.argmin(lows[tail_start:]))
+    if not swing_lows or lows[tail_low_idx] <= lows[swing_lows[-1]]:
+        swing_lows.append(tail_low_idx)
+    tail_high_idx = tail_start + int(np.argmax(highs_arr[tail_start:]))
+    if not swing_highs or highs_arr[tail_high_idx] >= highs_arr[swing_highs[-1]]:
+        swing_highs.append(tail_high_idx)
+
+    # 配对：每个波谷找它前面最近的波峰，形成"高点→低点"下跌波段
+    # 只保留跌幅 > 5% 的有效波段，过滤噪音
+    down_swings: list[tuple[int, int]] = []
+    for low_idx in swing_lows:
+        prev_highs = [h for h in swing_highs if h < low_idx]
+        if prev_highs:
+            high_idx = prev_highs[-1]
+            drop_pct = (highs_arr[high_idx] - lows[low_idx]) / highs_arr[high_idx]
+            if drop_pct > 0.05:
+                down_swings.append((high_idx, low_idx))
+
+    trend_detail: dict = {}
+    if len(down_swings) >= 2:
+        recent_swing = down_swings[-1]
+        prev_swing = down_swings[-2]
+        # 计算每段下跌波段内所有交易日的平均成交量
+        recent_vols = [float(vol[i]) for i in range(recent_swing[0], recent_swing[1] + 1)]
+        prev_vols = [float(vol[i]) for i in range(prev_swing[0], prev_swing[1] + 1)]
+        avg_recent_wave = float(np.mean(recent_vols)) if recent_vols else None
+        avg_prev_wave = float(np.mean(prev_vols)) if prev_vols else None
+        if avg_recent_wave and avg_prev_wave:
+            trend_ratio = avg_recent_wave / avg_prev_wave if avg_prev_wave > 0 else 1.0
+            score_trend = _clamp(1 - trend_ratio) if trend_ratio < 1 else 0.0
+            trend_detail = {
+                "recent_start": str(dates[recent_swing[0]]),
+                "recent_end": str(dates[recent_swing[1]]),
+                "recent_days": recent_swing[1] - recent_swing[0] + 1,
+                "recent_high": float(highs_arr[recent_swing[0]]),
+                "recent_low": float(lows[recent_swing[1]]),
+                "prev_start": str(dates[prev_swing[0]]),
+                "prev_end": str(dates[prev_swing[1]]),
+                "prev_days": prev_swing[1] - prev_swing[0] + 1,
+                "prev_high": float(highs_arr[prev_swing[0]]),
+                "prev_low": float(lows[prev_swing[1]]),
+            }
+        else:
+            avg_recent_wave = None
+            avg_prev_wave = None
+            trend_ratio = None
+            score_trend = 0.0
     else:
-        desc = f"5日均量 = 20日均量的 {ratio*100:.0f}%，未缩量"
+        avg_recent_wave = None
+        avg_prev_wave = None
+        trend_ratio = None
+        score_trend = 0.0
+
+    # --- 维度5: 量价背离 — 价格创新低但成交量不创新低 ---
+    score_divergence = 0.0
+    div_detail: dict = {}
+    lows = df["low"].values
+    if n >= 40:
+        recent_low = float(np.min(lows[-10:]))
+        prev_low = float(np.min(lows[-30:-10]))
+        if recent_low < prev_low:
+            recent_low_idx = n - 10 + int(np.argmin(lows[-10:]))
+            prev_low_idx = n - 30 + int(np.argmin(lows[-30:-10]))
+            vol_at_recent_low = float(vol[recent_low_idx])
+            vol_at_prev_low = float(vol[prev_low_idx])
+            div_detail = {
+                "recent_low_date": str(dates[recent_low_idx]),
+                "recent_low_price": recent_low,
+                "recent_low_vol": vol_at_recent_low,
+                "prev_low_date": str(dates[prev_low_idx]),
+                "prev_low_price": prev_low,
+                "prev_low_vol": vol_at_prev_low,
+            }
+            if vol_at_recent_low < vol_at_prev_low:
+                score_divergence = _clamp((vol_at_prev_low - vol_at_recent_low) / vol_at_prev_low * 2)
+
+    # --- 综合评分 ---
+    # 权重：量价背离(最强) 30% + 趋势缩量 25% + 明显缩量 20% + 阶段缩量 15% + 单日 10%
+    conf = _clamp(
+        score_divergence * 0.30
+        + score_trend * 0.25
+        + score_obvious * 0.20
+        + score_stage * 0.15
+        + score_single * 0.10
+    )
+
+    # --- 描述 ---
+    n_down = len(recent_down_vols)
+    hits = sum([
+        score_single > 0, score_stage > 0, score_obvious > 0,
+        score_trend > 0, score_divergence > 0,
+    ])
+    parts = [f"近10日有{n_down}天下跌"]
+    if hits == 0:
+        parts.append("5项观察均未达标，无缩量迹象")
+    elif hits <= 2:
+        parts.append(f"{hits}/5项达标，轻微缩量")
+    elif hits <= 3:
+        parts.append(f"{hits}/5项达标，缩量特征初现")
+    else:
+        parts.append(f"{hits}/5项达标，抛压明显减轻")
+    desc = "，".join(parts)
 
     return SignalResult(
         id="vol_shrink", name="缩量下跌", category="left",
         confidence=conf, light=_to_light(conf, thresholds), thresholds=thresholds, weight=1,
-        description=desc, data={"vol5": vol5, "vol20": vol20, "ratio": ratio},
+        description=desc,
+        data={
+            "down_days": n_down, "avg_down_vol": avg_down_vol, "vol20": vol20,
+            "single_ratio": single_ratio, "stage_ratio": stage_ratio,
+            "trend_ratio": trend_ratio, "score_divergence": score_divergence,
+            "last_down_date": last_down_date,
+            "last_down_vol": last_down_vol,
+            "avg_recent_wave": avg_recent_wave,
+            "avg_prev_wave": avg_prev_wave,
+            "trend_detail": trend_detail,
+            "div_detail": div_detail,
+            "scores": {
+                "single": score_single, "stage": score_stage,
+                "obvious": score_obvious, "trend": score_trend,
+                "divergence": score_divergence,
+            },
+        },
     )
 
 
