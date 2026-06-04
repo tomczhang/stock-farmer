@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AAPL 信号诊断 — stock-farmer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro", "Segoe UI", sans-serif; }
+    .chart-container { height: 320px; border-radius: 8px; overflow: hidden; margin-top: 8px; border: 1px solid #e5e7eb; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 py-6 md:py-10">
+
+    <!-- Nav + Quick Analyze -->
+    <nav class="flex items-center justify-between mb-6 gap-3">
+      <a href="./index.html" class="text-sm text-gray-500 hover:text-blue-600">&larr; 首页</a>
+      <form id="quickForm" class="flex items-center gap-2" onsubmit="return handleQuickAnalyze(event)">
+        <input id="quickTicker" type="text" placeholder="输入代码 如 AAPL"
+               class="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-36 md:w-44
+                      focus:border-blue-500 focus:outline-none text-gray-900 placeholder-gray-400">
+        <button type="submit"
+                class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded-lg transition-colors">
+          分析
+        </button>
+      </form>
+    </nav>
+
+    <!-- Header -->
+    <header class="mb-6">
+      <div class="flex items-baseline gap-3 flex-wrap">
+        <h1 class="text-2xl md:text-3xl font-bold text-gray-900">AAPL</h1>
+        <span class="text-gray-500 text-lg">AAPL</span>
+        <span class="text-xl font-semibold text-gray-800">N/A</span>
+        <span class="text-green-600 text-sm font-medium"></span>
+      </div>
+      <p class="text-gray-400 text-xs mt-1">分析时间：2026-06-02 11:49</p>
+    </header>
+
+    <!-- Conclusion Card -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 md:p-6 mb-6">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="text-3xl">🟡</span>
+        <div>
+          <h2 class="text-xl font-bold text-gray-900">底部特征初现</h2>
+          <p class="text-gray-500 text-sm">列入观察清单</p>
+        </div>
+      </div>
+      <p class="text-sm text-blue-600 mb-4">📌 出现放量阳线（成交量 > 20日均量）则确认</p>
+      <div class="mt-3">
+        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+          <span>综合强度</span>
+          <span class="font-semibold text-gray-800">45%</span>
+        </div>
+        <div class="relative h-3 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:25%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:25%;width:20%"></div>
+  <div class="absolute inset-y-0 bg-yellow-100" style="left:45%;width:15%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:60%;width:20%"></div>
+  <div class="absolute inset-y-0 bg-emerald-100" style="left:80%;width:20%"></div>
+  <div class="absolute top-0.5 w-2 h-2 rounded-full bg-blue-600 shadow-md" style="left:calc(45.16820708033349% - 4px)"></div>
+</div>
+        <div class="flex justify-between text-[10px] text-gray-400 mt-1">
+          <span>🔴 0-25%</span><span>🟡 25-45%</span><span>🟡⭐ 45-60%</span><span>🟢 60-80%</span><span>🟢🟢 80%+</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Left Side Signals -->
+    <section class="mb-6">
+      <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">左侧信号 · 底部特征</h3>
+      <div class="grid grid-cols-1 gap-3">
+        <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🔴</span>
+      <span class="font-medium text-sm text-gray-800">缩量下跌</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#ef4444">0%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:0.0%;background:linear-gradient(90deg,#ef4444,#ef4444)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">近10日有4天下跌，下跌日均量=47.5M的106%，未缩量</p>
+  <div class="mt-3 text-xs">
+  <table class="w-full border-collapse">
+    <thead><tr class="text-gray-400 border-b border-gray-100">
+      <th class="text-left py-1 font-medium">观察项</th>
+      <th class="text-left py-1 font-medium">判断标准</th>
+      <th class="text-center py-1 font-medium">当前值</th>
+      <th class="text-center py-1 font-medium">状态</th>
+    </tr></thead>
+    <tbody class="text-gray-600">
+      <tr class="border-b border-gray-50">
+        <td class="py-1">单日缩量</td>
+        <td class="py-1">最近下跌日量 &lt; MA20</td>
+        <td class="text-center py-1">103%</td>
+        <td class="text-center py-1">🔴</td>
+      </tr>
+      <tr class="border-b border-gray-50">
+        <td class="py-1">阶段缩量</td>
+        <td class="py-1">近期下跌日均量 &lt; MA20</td>
+        <td class="text-center py-1">106%</td>
+        <td class="text-center py-1">🔴</td>
+      </tr>
+      <tr class="border-b border-gray-50">
+        <td class="py-1">明显缩量</td>
+        <td class="py-1">下跌日均量 &lt; MA20 × 80%</td>
+        <td class="text-center py-1">106%</td>
+        <td class="text-center py-1">🔴</td>
+      </tr>
+      <tr class="border-b border-gray-50">
+        <td class="py-1">趋势缩量</td>
+        <td class="py-1">近一轮下跌量能 &lt; 上一轮</td>
+        <td class="text-center py-1">104%</td>
+        <td class="text-center py-1">🔴</td>
+      </tr>
+      <tr>
+        <td class="py-1">量价背离</td>
+        <td class="py-1">价创新低但量不创新低</td>
+        <td class="text-center py-1">否</td>
+        <td class="text-center py-1">🔴</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="text-[10px] text-gray-400 mt-2">MA20 = 20日平均成交量（近1个月量能基准） · MA60 = 60日平均成交量（近3个月中长期量能基准）</p>
+</div>
+  <div id="chart-0" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🟢</span>
+      <span class="font-medium text-sm text-gray-800">跌不动</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#22c55e">100%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:100.0%;background:linear-gradient(90deg,#22c55e,#22c55e)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">近5日最低 305.02，未破前低 265.07</p>
+  
+  <div id="chart-1" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🔴</span>
+      <span class="font-medium text-sm text-gray-800">假破位收回</span>
+      <span class="text-[10px] bg-gray-200 text-gray-600 px-1 rounded">×2</span>
+    </div>
+    <span class="text-sm font-bold" style="color:#ef4444">0%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:30.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:30.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:60.0%;width:40.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:0.0%;background:linear-gradient(90deg,#ef4444,#ef4444)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 30%</span><span>🟡 60%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">近期未出现破位后收回形态</p>
+  
+  <div id="chart-2" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🟡</span>
+      <span class="font-medium text-sm text-gray-800">波动收敛</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#f59e0b">45%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:45.432340009770265%;background:linear-gradient(90deg,#f59e0b,#f59e0b)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">ATR 轻微下降 23%，波动开始收敛</p>
+  
+  <div id="chart-3" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🔴</span>
+      <span class="font-medium text-sm text-gray-800">筹码集中</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#ef4444">0%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:0.0%;background:linear-gradient(90deg,#ef4444,#ef4444)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">Volume Profile 数据不可用</p>
+  
+  <div id="chart-4" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🟢</span>
+      <span class="font-medium text-sm text-gray-800">大盘环境</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#22c55e">100%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:100.0%;background:linear-gradient(90deg,#22c55e,#22c55e)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">指数站上 MA20 (741)，市场环境偏强</p>
+  
+  <div id="chart-5" class="chart-container"></div>
+</div>
+      </div>
+    </section>
+
+    <!-- Right Side Signals -->
+    <section class="mb-6">
+      <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">右侧信号 · 趋势确认</h3>
+      <div class="grid grid-cols-1 gap-3">
+        <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🟢</span>
+      <span class="font-medium text-sm text-gray-800">站回均线</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#22c55e">100%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:100.0%;background:linear-gradient(90deg,#22c55e,#22c55e)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">收盘 306.31 > MA10 (306.29) > MA20 (298.85)，均线多头</p>
+  
+  <div id="chart-6" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🟡</span>
+      <span class="font-medium text-sm text-gray-800">放量反包</span>
+      <span class="text-[10px] bg-gray-200 text-gray-600 px-1 rounded">×2</span>
+    </div>
+    <span class="text-sm font-bold" style="color:#f59e0b">47%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:40.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:75.0%;width:25.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:47.39682735177679%;background:linear-gradient(90deg,#f59e0b,#f59e0b)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 75%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">阳线成交量为 20日均量的 1.5 倍</p>
+  
+  <div id="chart-7" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🔴</span>
+      <span class="font-medium text-sm text-gray-800">MACD金叉</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#ef4444">2%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:1.7924902506780183%;background:linear-gradient(90deg,#ef4444,#ef4444)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">DIF (9.787) 在 DEA (9.778) 上方，金叉已确认</p>
+  
+  <div id="chart-8" class="chart-container"></div>
+</div>
+<div class="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🟢</span>
+      <span class="font-medium text-sm text-gray-800">低点抬升</span>
+      
+    </div>
+    <span class="text-sm font-bold" style="color:#22c55e">100%</span>
+  </div>
+  <div class="relative h-2 rounded-full overflow-hidden bg-gray-100">
+  <div class="absolute inset-y-0 left-0 bg-red-100" style="width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-amber-100" style="left:35.0%;width:35.0%"></div>
+  <div class="absolute inset-y-0 bg-green-100" style="left:70.0%;width:30.0%"></div>
+  <div class="absolute inset-y-0 left-0 rounded-full" style="width:100.0%;background:linear-gradient(90deg,#22c55e,#22c55e)"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-400 mt-0.5">
+  <span>🔴 35%</span><span>🟡 70%</span><span>🟢</span>
+</div>
+  <p class="text-xs text-gray-500 mt-2">近期低点 294.91 高于前低 274.86，抬升 20.05</p>
+  
+  <div id="chart-9" class="chart-container"></div>
+</div>
+      </div>
+    </section>
+
+    <!-- Narrative -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
+      <h3 class="text-sm font-semibold text-gray-500 mb-2">综述</h3>
+      <p class="text-gray-700 text-sm leading-relaxed">AAPL (AAPL) 当前开始出现初步的底部特征，但信号尚不充分。左侧信号方面，跌不动、大盘环境等 2 项信号确认，另有 1 项在酝酿中。右侧确认方面，站回均线、低点抬升已触发，趋势反转信号较强。建议：列入观察清单。出现放量阳线（成交量 > 20日均量）则确认。</p>
+    </section>
+
+    <!-- Footer -->
+    <footer class="text-center text-xs text-gray-400 pt-4 border-t border-gray-200">
+      <p>仅供参考，不构成投资建议 · stock-farmer · 2026-06-02 11:49</p>
+    </footer>
+
+  </div>
+
+  <script>
+    const DATA = {"klines": [{"date": "2025-12-08", "open": 278.13, "high": 279.67, "low": 276.15, "close": 277.89, "volume": 38211741}, {"date": "2025-12-09", "open": 278.16, "high": 280.03, "low": 276.92, "close": 277.18, "volume": 32192972}, {"date": "2025-12-10", "open": 277.75, "high": 279.75, "low": 276.44, "close": 278.78, "volume": 33038011}, {"date": "2025-12-11", "open": 279.1, "high": 279.59, "low": 273.81, "close": 278.03, "volume": 33247766}, {"date": "2025-12-12", "open": 277.9, "high": 279.22, "low": 276.82, "close": 278.28, "volume": 39532668}, {"date": "2025-12-15", "open": 280.15, "high": 280.15, "low": 272.84, "close": 274.11, "volume": 50409068}, {"date": "2025-12-16", "open": 272.82, "high": 275.5, "low": 271.79, "close": 274.61, "volume": 37648627}, {"date": "2025-12-17", "open": 275.01, "high": 276.16, "low": 271.64, "close": 271.84, "volume": 50138466}, {"date": "2025-12-18", "open": 273.61, "high": 273.63, "low": 266.95, "close": 272.19, "volume": 51630473}, {"date": "2025-12-19", "open": 272.14, "high": 274.6, "low": 269.9, "close": 273.67, "volume": 144631573}, {"date": "2025-12-22", "open": 272.86, "high": 273.88, "low": 270.5, "close": 270.97, "volume": 36571827}, {"date": "2025-12-23", "open": 270.84, "high": 272.5, "low": 269.56, "close": 272.36, "volume": 29641997}, {"date": "2025-12-24", "open": 272.34, "high": 275.43, "low": 272.19, "close": 273.81, "volume": 17133225}, {"date": "2025-12-26", "open": 274.16, "high": 275.37, "low": 272.86, "close": 273.4, "volume": 21521796}, {"date": "2025-12-29", "open": 272.69, "high": 274.36, "low": 272.35, "close": 273.76, "volume": 23714986}, {"date": "2025-12-30", "open": 272.81, "high": 274.08, "low": 272.28, "close": 273.08, "volume": 22139615}, {"date": "2025-12-31", "open": 273.06, "high": 273.68, "low": 271.75, "close": 271.86, "volume": 27293584}, {"date": "2026-01-02", "open": 272.25, "high": 277.84, "low": 269.0, "close": 271.01, "volume": 37838054}, {"date": "2026-01-05", "open": 270.64, "high": 271.51, "low": 266.14, "close": 267.26, "volume": 45647185}, {"date": "2026-01-06", "open": 267.0, "high": 267.55, "low": 262.12, "close": 262.36, "volume": 52352090}, {"date": "2026-01-07", "open": 263.2, "high": 263.68, "low": 259.81, "close": 260.33, "volume": 48309414}, {"date": "2026-01-08", "open": 257.02, "high": 259.29, "low": 255.7, "close": 259.04, "volume": 50419336}, {"date": "2026-01-09", "open": 259.07, "high": 260.21, "low": 256.22, "close": 259.37, "volume": 39996966}, {"date": "2026-01-12", "open": 259.16, "high": 261.3, "low": 256.8, "close": 260.25, "volume": 45263372}, {"date": "2026-01-13", "open": 258.72, "high": 261.81, "low": 258.39, "close": 261.05, "volume": 45730796}, {"date": "2026-01-14", "open": 259.49, "high": 261.82, "low": 256.71, "close": 259.96, "volume": 40019349}, {"date": "2026-01-15", "open": 260.65, "high": 261.04, "low": 257.05, "close": 258.21, "volume": 39388475}, {"date": "2026-01-16", "open": 257.9, "high": 258.9, "low": 254.93, "close": 255.53, "volume": 72142772}, {"date": "2026-01-20", "open": 252.73, "high": 254.79, "low": 243.42, "close": 246.7, "volume": 80267504}, {"date": "2026-01-21", "open": 248.7, "high": 251.56, "low": 245.18, "close": 247.65, "volume": 54641725}, {"date": "2026-01-22", "open": 249.2, "high": 251.0, "low": 248.15, "close": 248.35, "volume": 39708293}, {"date": "2026-01-23", "open": 247.32, "high": 249.41, "low": 244.68, "close": 248.04, "volume": 41688953}, {"date": "2026-01-26", "open": 251.48, "high": 256.56, "low": 249.8, "close": 255.41, "volume": 55969183}, {"date": "2026-01-27", "open": 259.17, "high": 261.95, "low": 258.21, "close": 258.27, "volume": 49648271}, {"date": "2026-01-28", "open": 257.65, "high": 258.86, "low": 254.51, "close": 256.44, "volume": 41287969}, {"date": "2026-01-29", "open": 258.0, "high": 259.65, "low": 254.41, "close": 258.28, "volume": 67252891}, {"date": "2026-01-30", "open": 255.16, "high": 261.9, "low": 252.18, "close": 259.48, "volume": 92443303}, {"date": "2026-02-02", "open": 260.03, "high": 270.49, "low": 259.2, "close": 270.01, "volume": 73913423}, {"date": "2026-02-03", "open": 269.2, "high": 271.88, "low": 267.61, "close": 269.48, "volume": 64394650}, {"date": "2026-02-04", "open": 272.29, "high": 278.95, "low": 272.29, "close": 276.49, "volume": 90545398}, {"date": "2026-02-05", "open": 278.13, "high": 279.5, "low": 273.23, "close": 275.91, "volume": 52977396}, {"date": "2026-02-06", "open": 277.12, "high": 280.9, "low": 276.93, "close": 278.12, "volume": 50453279}, {"date": "2026-02-09", "open": 277.9, "high": 278.2, "low": 271.7, "close": 274.62, "volume": 44623355}, {"date": "2026-02-10", "open": 274.88, "high": 275.37, "low": 272.94, "close": 273.68, "volume": 34376605}, {"date": "2026-02-11", "open": 274.69, "high": 280.18, "low": 274.45, "close": 275.5, "volume": 51931208}, {"date": "2026-02-12", "open": 275.59, "high": 275.72, "low": 260.18, "close": 261.73, "volume": 81077219}, {"date": "2026-02-13", "open": 262.01, "high": 262.23, "low": 255.45, "close": 255.78, "volume": 56290673}, {"date": "2026-02-17", "open": 258.05, "high": 266.29, "low": 255.54, "close": 263.88, "volume": 58468913}, {"date": "2026-02-18", "open": 263.6, "high": 266.82, "low": 262.45, "close": 264.35, "volume": 34202996}, {"date": "2026-02-19", "open": 262.6, "high": 264.48, "low": 260.05, "close": 260.58, "volume": 30845258}, {"date": "2026-02-20", "open": 258.97, "high": 264.75, "low": 258.16, "close": 264.58, "volume": 42070374}, {"date": "2026-02-23", "open": 263.49, "high": 269.43, "low": 263.38, "close": 266.18, "volume": 37308000}, {"date": "2026-02-24", "open": 267.86, "high": 274.89, "low": 267.71, "close": 272.14, "volume": 47014549}, {"date": "2026-02-25", "open": 271.78, "high": 274.94, "low": 271.05, "close": 274.23, "volume": 33714222}, {"date": "2026-02-26", "open": 274.94, "high": 276.11, "low": 270.8, "close": 272.95, "volume": 32345105}, {"date": "2026-02-27", "open": 272.81, "high": 272.81, "low": 262.89, "close": 264.18, "volume": 72366505}, {"date": "2026-03-02", "open": 262.41, "high": 266.53, "low": 260.2, "close": 264.72, "volume": 41827920}, {"date": "2026-03-03", "open": 263.48, "high": 265.56, "low": 260.13, "close": 263.75, "volume": 38568896}, {"date": "2026-03-04", "open": 264.65, "high": 266.15, "low": 261.42, "close": 262.52, "volume": 39802859}, {"date": "2026-03-05", "open": 260.79, "high": 261.56, "low": 257.25, "close": 260.29, "volume": 49658509}, {"date": "2026-03-06", "open": 258.63, "high": 258.77, "low": 254.37, "close": 257.46, "volume": 41119995}, {"date": "2026-03-09", "open": 255.69, "high": 261.15, "low": 253.68, "close": 259.88, "volume": 38218531}, {"date": "2026-03-10", "open": 257.64, "high": 262.48, "low": 256.95, "close": 260.83, "volume": 30590691}, {"date": "2026-03-11", "open": 261.09, "high": 262.13, "low": 259.55, "close": 260.81, "volume": 26218534}, {"date": "2026-03-12", "open": 258.66, "high": 258.95, "low": 254.18, "close": 255.76, "volume": 40793922}, {"date": "2026-03-13", "open": 255.48, "high": 256.33, "low": 249.52, "close": 250.12, "volume": 36929911}, {"date": "2026-03-16", "open": 252.1, "high": 253.88, "low": 249.88, "close": 252.82, "volume": 32074181}, {"date": "2026-03-17", "open": 252.96, "high": 255.13, "low": 252.18, "close": 254.23, "volume": 32361394}, {"date": "2026-03-18", "open": 252.62, "high": 254.94, "low": 249.0, "close": 249.94, "volume": 35757686}, {"date": "2026-03-19", "open": 249.4, "high": 251.83, "low": 247.3, "close": 248.96, "volume": 34864055}, {"date": "2026-03-20", "open": 247.97, "high": 249.2, "low": 246.0, "close": 247.99, "volume": 88331039}, {"date": "2026-03-23", "open": 253.97, "high": 254.6, "low": 250.28, "close": 251.49, "volume": 40546003}, {"date": "2026-03-24", "open": 250.35, "high": 254.82, "low": 249.55, "close": 251.64, "volume": 45151904}, {"date": "2026-03-25", "open": 254.09, "high": 255.0, "low": 251.6, "close": 252.62, "volume": 28476668}, {"date": "2026-03-26", "open": 252.12, "high": 257.0, "low": 250.77, "close": 252.89, "volume": 41796650}, {"date": "2026-03-27", "open": 253.9, "high": 255.49, "low": 248.07, "close": 248.8, "volume": 47899998}, {"date": "2026-03-30", "open": 250.07, "high": 250.87, "low": 245.51, "close": 246.63, "volume": 39446015}, {"date": "2026-03-31", "open": 247.91, "high": 255.48, "low": 247.1, "close": 253.79, "volume": 49597194}, {"date": "2026-04-01", "open": 254.08, "high": 256.18, "low": 253.33, "close": 255.63, "volume": 40059432}, {"date": "2026-04-02", "open": 254.2, "high": 256.13, "low": 250.65, "close": 255.92, "volume": 31288896}, {"date": "2026-04-06", "open": 256.51, "high": 262.16, "low": 256.46, "close": 258.86, "volume": 29329910}, {"date": "2026-04-07", "open": 256.15, "high": 256.2, "low": 245.7, "close": 253.5, "volume": 62147944}, {"date": "2026-04-08", "open": 258.45, "high": 259.75, "low": 256.53, "close": 258.9, "volume": 41032627}, {"date": "2026-04-09", "open": 259.0, "high": 261.12, "low": 256.07, "close": 260.49, "volume": 28121302}, {"date": "2026-04-10", "open": 259.98, "high": 262.19, "low": 259.02, "close": 260.48, "volume": 31291385}, {"date": "2026-04-13", "open": 259.73, "high": 260.18, "low": 256.66, "close": 259.2, "volume": 36234480}, {"date": "2026-04-14", "open": 259.25, "high": 261.93, "low": 257.19, "close": 258.83, "volume": 48370710}, {"date": "2026-04-15", "open": 258.16, "high": 266.56, "low": 257.81, "close": 266.43, "volume": 49913490}, {"date": "2026-04-16", "open": 266.8, "high": 267.16, "low": 261.27, "close": 263.4, "volume": 43322984}, {"date": "2026-04-17", "open": 266.96, "high": 272.3, "low": 266.72, "close": 270.23, "volume": 61436160}, {"date": "2026-04-20", "open": 270.33, "high": 274.27, "low": 270.29, "close": 273.05, "volume": 36590135}, {"date": "2026-04-21", "open": 271.5, "high": 272.8, "low": 265.4, "close": 266.17, "volume": 50209699}, {"date": "2026-04-22", "open": 267.82, "high": 273.74, "low": 266.87, "close": 273.17, "volume": 43249072}, {"date": "2026-04-23", "open": 275.05, "high": 275.77, "low": 271.65, "close": 273.43, "volume": 33399530}, {"date": "2026-04-24", "open": 272.75, "high": 273.06, "low": 269.65, "close": 271.06, "volume": 38156959}, {"date": "2026-04-27", "open": 266.09, "high": 268.36, "low": 265.07, "close": 267.61, "volume": 41466553}, {"date": "2026-04-28", "open": 272.33, "high": 273.23, "low": 268.66, "close": 270.71, "volume": 40018566}, {"date": "2026-04-29", "open": 267.55, "high": 271.04, "low": 267.04, "close": 270.17, "volume": 30047854}, {"date": "2026-04-30", "open": 270.5, "high": 276.0, "low": 268.14, "close": 271.35, "volume": 91848046}, {"date": "2026-05-01", "open": 278.86, "high": 287.22, "low": 278.37, "close": 280.14, "volume": 79915442}, {"date": "2026-05-04", "open": 279.65, "high": 280.63, "low": 274.86, "close": 276.83, "volume": 46668395}, {"date": "2026-05-05", "open": 276.93, "high": 284.57, "low": 276.5, "close": 284.18, "volume": 49311712}, {"date": "2026-05-06", "open": 281.92, "high": 288.03, "low": 281.07, "close": 287.51, "volume": 58336056}, {"date": "2026-05-07", "open": 289.27, "high": 292.13, "low": 285.78, "close": 287.44, "volume": 45224299}, {"date": "2026-05-08", "open": 290.01, "high": 294.76, "low": 290.0, "close": 293.32, "volume": 52692736}, {"date": "2026-05-11", "open": 291.98, "high": 293.88, "low": 290.23, "close": 292.68, "volume": 42247239}, {"date": "2026-05-12", "open": 292.56, "high": 295.27, "low": 292.56, "close": 294.8, "volume": 45748129}, {"date": "2026-05-13", "open": 293.5, "high": 300.92, "low": 293.5, "close": 298.87, "volume": 52684226}, {"date": "2026-05-14", "open": 299.82, "high": 300.45, "low": 295.38, "close": 298.21, "volume": 35324918}, {"date": "2026-05-15", "open": 297.9, "high": 303.2, "low": 296.52, "close": 300.23, "volume": 54862836}, {"date": "2026-05-18", "open": 300.24, "high": 300.66, "low": 294.91, "close": 297.84, "volume": 34482925}, {"date": "2026-05-19", "open": 296.97, "high": 300.51, "low": 296.35, "close": 298.97, "volume": 42243561}, {"date": "2026-05-20", "open": 298.18, "high": 302.8, "low": 298.08, "close": 302.25, "volume": 38229843}, {"date": "2026-05-21", "open": 301.06, "high": 305.54, "low": 300.4, "close": 304.99, "volume": 42965126}, {"date": "2026-05-22", "open": 306.12, "high": 311.4, "low": 305.84, "close": 308.82, "volume": 43670211}, {"date": "2026-05-26", "open": 309.56, "high": 311.82, "low": 307.67, "close": 308.33, "volume": 48000493}, {"date": "2026-05-27", "open": 308.33, "high": 313.26, "low": 308.3, "close": 310.85, "volume": 50430918}, {"date": "2026-05-28", "open": 310.68, "high": 312.8, "low": 309.57, "close": 312.51, "volume": 48220309}, {"date": "2026-05-29", "open": 311.77, "high": 315.0, "low": 309.53, "close": 312.06, "volume": 70026752}, {"date": "2026-06-01", "open": 309.62, "high": 310.94, "low": 305.02, "close": 306.31, "volume": 48809225}], "index_klines": [{"date": "2026-04-20", "close": 708.72}, {"date": "2026-04-21", "close": 704.08}, {"date": "2026-04-22", "close": 711.21}, {"date": "2026-04-23", "close": 708.45}, {"date": "2026-04-24", "close": 713.94}, {"date": "2026-04-27", "close": 715.17}, {"date": "2026-04-28", "close": 711.69}, {"date": "2026-04-29", "close": 711.58}, {"date": "2026-04-30", "close": 718.66}, {"date": "2026-05-01", "close": 720.65}, {"date": "2026-05-04", "close": 718.01}, {"date": "2026-05-05", "close": 723.77}, {"date": "2026-05-06", "close": 733.83}, {"date": "2026-05-07", "close": 731.58}, {"date": "2026-05-08", "close": 737.62}, {"date": "2026-05-11", "close": 739.3}, {"date": "2026-05-12", "close": 738.18}, {"date": "2026-05-13", "close": 742.31}, {"date": "2026-05-14", "close": 748.17}, {"date": "2026-05-15", "close": 739.17}, {"date": "2026-05-18", "close": 738.65}, {"date": "2026-05-19", "close": 733.73}, {"date": "2026-05-20", "close": 741.25}, {"date": "2026-05-21", "close": 742.72}, {"date": "2026-05-22", "close": 745.64}, {"date": "2026-05-26", "close": 750.59}, {"date": "2026-05-27", "close": 750.46}, {"date": "2026-05-28", "close": 754.6}, {"date": "2026-05-29", "close": 756.48}, {"date": "2026-06-01", "close": 758.54}], "volume_profile": []};
+    const CHARTS = {};
+
+    function initCharts() {
+      if (!DATA.klines || !DATA.klines.length) return;
+      const klines = DATA.klines;
+      const indexKlines = DATA.index_klines || [];
+      const vp = DATA.volume_profile || [];
+
+      // Signal chart configs
+      const configs = {
+        // S1: 缩量下跌 — 成交量柱状图 + MA5/MA20
+        0: () => renderVolumeChart('chart-0', klines),
+        // S2: 跌不动 — 价格折线 + 前低/近低标注
+        1: () => renderPriceWithLevels('chart-1', klines, 'no_new_low'),
+        // S3: 假破位收回 — K线 + 前低标注
+        2: () => renderCandlestick('chart-2', klines),
+        // S4: 波动收敛 — ATR 折线
+        3: () => renderATR('chart-3', klines),
+        // S5: 筹码集中 — Volume Profile
+        4: () => renderVolumeProfile('chart-4', vp),
+        // S6: 大盘环境 — 指数折线 + MA20
+        5: () => renderIndexChart('chart-5', indexKlines),
+        // S7: 站回均线 — 价格 + MA10/MA20
+        6: () => renderPriceWithMA('chart-6', klines),
+        // S8: 放量反包 — K线 + 成交量
+        7: () => renderCandlestickWithVolume('chart-7', klines),
+        // S9: MACD金叉 — MACD 图
+        8: () => renderMACD('chart-8', klines),
+        // S10: 低点抬升 — 价格折线 + 低点标注
+        9: () => renderPriceWithLevels('chart-9', klines, 'higher_low'),
+      };
+
+      Object.entries(configs).forEach(([idx, fn]) => {
+        const el = document.getElementById('chart-' + idx);
+        if (el) fn();
+      });
+    }
+
+    function createChart(containerId) {
+      const el = document.getElementById(containerId);
+      if (!el) return null;
+      const w = el.clientWidth || el.parentElement.clientWidth || 600;
+      const chart = LightweightCharts.createChart(el, {
+        width: w,
+        height: 320,
+        layout: { background: { color: '#ffffff' }, textColor: '#6b7280' },
+        grid: { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
+        crosshair: { mode: 0 },
+        rightPriceScale: { borderColor: '#e5e7eb' },
+        timeScale: { borderColor: '#e5e7eb', timeVisible: false },
+        handleScroll: false,
+        handleScale: false,
+      });
+      new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth })).observe(el);
+      return chart;
+    }
+
+    function renderVolumeChart(id, klines) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.style.height = '420px';
+      const w = el.clientWidth || el.parentElement.clientWidth || 600;
+      const chart = LightweightCharts.createChart(el, {
+        width: w, height: 420,
+        layout: { background: { color: '#ffffff' }, textColor: '#6b7280' },
+        grid: { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
+        crosshair: { mode: 0 },
+        rightPriceScale: { borderColor: '#e5e7eb' },
+        timeScale: { borderColor: '#e5e7eb', timeVisible: false },
+        handleScroll: false, handleScale: false,
+      });
+      // K线（占上方70%）
+      const candleSeries = chart.addCandlestickSeries({
+        upColor: '#16a34a', downColor: '#dc2626', borderVisible: false,
+        wickUpColor: '#16a34a', wickDownColor: '#dc2626',
+        priceScaleId: 'right',
+      });
+      candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.02, bottom: 0.35 } });
+      candleSeries.setData(klines.map(k => ({ time: k.date, open: k.open, high: k.high, low: k.low, close: k.close })));
+      // 成交量（占下方30%）— 下跌日红色，上涨日浅灰
+      const volumes = klines.map((k, i) => {
+        const isDown = i > 0 && k.close < klines[i-1].close;
+        return { time: k.date, value: k.volume, color: isDown ? '#dc2626cc' : '#d1d5db' };
+      });
+      const volSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'vol',
+      });
+      volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } });
+      volSeries.setData(volumes);
+      // MA20 成交量均线
+      const ma20Data = klines.map((k, i) => i >= 19 ? { time: k.date, value: klines.slice(i-19, i+1).reduce((s,x) => s+x.volume, 0) / 20 } : null).filter(Boolean);
+      chart.addLineSeries({ color: '#2563eb', lineWidth: 2, title: 'MA20', priceScaleId: 'vol' }).setData(ma20Data);
+      // MA60 成交量均线
+      const ma60Data = klines.map((k, i) => i >= 59 ? { time: k.date, value: klines.slice(i-59, i+1).reduce((s,x) => s+x.volume, 0) / 60 } : null).filter(Boolean);
+      chart.addLineSeries({ color: '#dc2626', lineWidth: 2, lineStyle: 2, title: 'MA60', priceScaleId: 'vol' }).setData(ma60Data);
+      chart.timeScale().fitContent();
+      new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth })).observe(el);
+    }
+
+    function renderPriceWithLevels(id, klines, type) {
+      const chart = createChart(id);
+      if (!chart) return;
+      const data = klines.map(k => ({ time: k.date, value: k.close }));
+      const line = chart.addLineSeries({ color: '#2563eb', lineWidth: 2 });
+      line.setData(data);
+      // Mark key levels
+      const lows = klines.map(k => k.low);
+      const recent5Low = Math.min(...lows.slice(-5));
+      const prev20Low = Math.min(...lows.slice(-25, -5));
+      line.createPriceLine({ price: prev20Low, color: '#ef4444', lineWidth: 1, lineStyle: 2, title: '前低' });
+      line.createPriceLine({ price: recent5Low, color: '#f59e0b', lineWidth: 1, lineStyle: 2, title: '近低' });
+      chart.timeScale().fitContent();
+    }
+
+    function renderCandlestick(id, klines) {
+      const chart = createChart(id);
+      if (!chart) return;
+      const data = klines.slice(-30).map(k => ({ time: k.date, open: k.open, high: k.high, low: k.low, close: k.close }));
+      const series = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626', borderVisible: false, wickUpColor: '#16a34a', wickDownColor: '#dc2626' });
+      series.setData(data);
+      const lows = klines.map(k => k.low);
+      const prevLow = Math.min(...lows.slice(-25, -5));
+      series.createPriceLine({ price: prevLow, color: '#ef4444', lineWidth: 1, lineStyle: 2, title: '前低' });
+      chart.timeScale().fitContent();
+    }
+
+    function renderATR(id, klines) {
+      const chart = createChart(id);
+      if (!chart) return;
+      const atrData = [];
+      for (let i = 1; i < klines.length; i++) {
+        const tr = Math.max(klines[i].high - klines[i].low, Math.abs(klines[i].high - klines[i-1].close), Math.abs(klines[i].low - klines[i-1].close));
+        if (i >= 14) {
+          const sum = klines.slice(i-13, i+1).reduce((s, k, j) => {
+            if (j === 0) return Math.max(k.high - k.low);
+            const prev = klines[i-14+j];
+            return s + Math.max(k.high - k.low, Math.abs(k.high - prev.close), Math.abs(k.low - prev.close));
+          }, 0);
+          atrData.push({ time: klines[i].date, value: sum / 14 });
+        }
+      }
+      const line = chart.addLineSeries({ color: '#7c3aed', lineWidth: 2, title: 'ATR(14)' });
+      line.setData(atrData);
+      chart.timeScale().fitContent();
+    }
+
+    function renderVolumeProfile(id, vp) {
+      const el = document.getElementById(id);
+      if (!el || !vp.length) { if (el) el.innerHTML = '<p class="text-xs text-gray-500 p-2">Volume Profile 数据不可用</p>'; return; }
+      const maxVol = Math.max(...vp.map(b => b.volume));
+      el.innerHTML = '<div class="flex flex-col gap-0.5 p-2">' + vp.slice().reverse().map(b => {
+        const pct = b.volume / maxVol * 100;
+        return `<div class="flex items-center gap-1"><span class="text-[9px] text-gray-500 w-12 text-right">${b.price_level.toFixed(1)}</span><div class="flex-1 h-2.5 bg-gray-100 rounded-sm overflow-hidden"><div class="h-full bg-blue-500/80 rounded-sm" style="width:${pct}%"></div></div><span class="text-[9px] text-gray-500 w-8">${b.pct.toFixed(0)}%</span></div>`;
+      }).join('') + '</div>';
+    }
+
+    function renderIndexChart(id, indexKlines) {
+      const chart = createChart(id);
+      if (!chart || !indexKlines.length) return;
+      const data = indexKlines.map(k => ({ time: k.date, value: k.close }));
+      const line = chart.addLineSeries({ color: '#2563eb', lineWidth: 2 });
+      line.setData(data);
+      // MA20
+      const ma20Data = indexKlines.map((k, i) => i >= 19 ? { time: k.date, value: indexKlines.slice(i-19, i+1).reduce((s,x) => s+x.close, 0) / 20 } : null).filter(Boolean);
+      const ma20Line = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, lineStyle: 2, title: 'MA20' });
+      ma20Line.setData(ma20Data);
+      chart.timeScale().fitContent();
+    }
+
+    function renderPriceWithMA(id, klines) {
+      const chart = createChart(id);
+      if (!chart) return;
+      const data = klines.map(k => ({ time: k.date, value: k.close }));
+      const line = chart.addLineSeries({ color: '#2563eb', lineWidth: 2 });
+      line.setData(data);
+      const ma10 = klines.map((k, i) => i >= 9 ? { time: k.date, value: klines.slice(i-9, i+1).reduce((s,x) => s+x.close, 0) / 10 } : null).filter(Boolean);
+      chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA10' }).setData(ma10);
+      const ma20 = klines.map((k, i) => i >= 19 ? { time: k.date, value: klines.slice(i-19, i+1).reduce((s,x) => s+x.close, 0) / 20 } : null).filter(Boolean);
+      chart.addLineSeries({ color: '#22c55e', lineWidth: 1, title: 'MA20' }).setData(ma20);
+      chart.timeScale().fitContent();
+    }
+
+    function renderCandlestickWithVolume(id, klines) {
+      const chart = createChart(id);
+      if (!chart) return;
+      const recent = klines.slice(-20);
+      const data = recent.map(k => ({ time: k.date, open: k.open, high: k.high, low: k.low, close: k.close }));
+      const series = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626', borderVisible: false, wickUpColor: '#16a34a', wickDownColor: '#dc2626' });
+      series.setData(data);
+      const volData = recent.map(k => ({ time: k.date, value: k.volume, color: k.close >= k.open ? '#16a34a99' : '#dc262699' }));
+      chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', scaleMargins: { top: 0.7, bottom: 0 } }).setData(volData);
+      chart.timeScale().fitContent();
+    }
+
+    function renderMACD(id, klines) {
+      const chart = createChart(id);
+      if (!chart) return;
+      const closes = klines.map(k => k.close);
+      // EMA
+      function ema(data, period) {
+        const k = 2 / (period + 1);
+        const result = [data[0]];
+        for (let i = 1; i < data.length; i++) result.push(data[i] * k + result[i-1] * (1-k));
+        return result;
+      }
+      const ema12 = ema(closes, 12);
+      const ema26 = ema(closes, 26);
+      const dif = ema12.map((v, i) => v - ema26[i]);
+      const dea = ema(dif, 9);
+      const macdData = dif.map((v, i) => ({ time: klines[i].date, value: v - dea[i], color: (v - dea[i]) >= 0 ? '#16a34aaa' : '#dc2626aa' }));
+      chart.addHistogramSeries({ priceFormat: { minMove: 0.01 } }).setData(macdData.slice(26));
+      chart.addLineSeries({ color: '#2563eb', lineWidth: 1, title: 'DIF' }).setData(dif.slice(26).map((v, i) => ({ time: klines[i+26].date, value: v })));
+      chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'DEA' }).setData(dea.slice(26).map((v, i) => ({ time: klines[i+26].date, value: v })));
+      chart.timeScale().fitContent();
+    }
+
+    // Quick analyze
+    const REPO = 'tomczhang/stock-farmer';
+    function handleQuickAnalyze(e) {
+      e.preventDefault();
+      const ticker = document.getElementById('quickTicker').value.trim().toUpperCase();
+      if (!ticker) return false;
+      const token = localStorage.getItem('gh_token');
+      if (!token) {
+        const t = prompt('首次使用需输入 GitHub Personal Access Token:');
+        if (!t) return false;
+        localStorage.setItem('gh_token', t);
+        triggerAnalyze(ticker, t);
+      } else triggerAnalyze(ticker, token);
+      return false;
+    }
+    async function triggerAnalyze(ticker, token) {
+      const btn = document.querySelector('#quickForm button');
+      btn.textContent = '提交中...';
+      try {
+        const r = await fetch('https://api.github.com/repos/' + REPO + '/dispatches', {
+          method: 'POST', headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github+json' },
+          body: JSON.stringify({ event_type: 'analyze', client_payload: { ticker } })
+        });
+        btn.textContent = r.status === 204 ? '已触发 ✓' : '失败';
+        if (r.status === 401) localStorage.removeItem('gh_token');
+      } catch(e) { btn.textContent = '网络错误'; }
+      setTimeout(() => btn.textContent = '分析', 3000);
+    }
+
+    window.addEventListener('load', () => setTimeout(initCharts, 100));
+  </script>
+</body>
+</html>

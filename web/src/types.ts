@@ -75,3 +75,83 @@ export interface ApiErrorBody {
   error: string;
   message: string;
 }
+
+export interface SignalReportPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface SignalRightState {
+  key: "default" | "warning-soft" | "warning" | "success";
+  label: "未触发" | "酝酿中" | "临界" | "已触发";
+}
+
+export interface SignalReportSignal {
+  id: string;
+  name: string;
+  category: "left" | "right";
+  confidence: number;
+  confidence_pct: number;
+  light: "red" | "yellow" | "green";
+  light_label: string;
+  thresholds: [number, number];
+  weight: number;
+  weight_label: string;
+  description: string;
+  data: Record<string, unknown>;
+  right_state: SignalRightState | null;
+}
+
+export interface SignalReportGroupSummary {
+  key: "left" | "right";
+  label: string;
+  score: number;
+  score_pct: number;
+  weight: number;
+  confirmed_count: number;
+  total_count: number;
+}
+
+export interface SignalReportResponse {
+  ticker: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  analyzed_at: string;
+  conclusion: {
+    phase: string;
+    icon: string;
+    action: string;
+    trigger: string;
+    strength: number;
+    strength_pct: number;
+  };
+  confirmation: {
+    score: number;
+    score_pct: number;
+    total_weight: number;
+    formula: string;
+    left: SignalReportGroupSummary;
+    right: SignalReportGroupSummary;
+  };
+  signals: SignalReportSignal[];
+  groups: {
+    left: SignalReportSignal[];
+    right: SignalReportSignal[];
+  };
+  narrative: string;
+  chart_data: {
+    klines: SignalReportPoint[];
+    index_klines: Array<{ date: string; close: number }>;
+    volume_profile: Array<{
+      price_level: number;
+      volume: number;
+      pct: number;
+    }>;
+  };
+  disclaimer: string;
+}

@@ -36,6 +36,33 @@ _DESIGN_TOKENS_CSS = """<style>
   --color-divider: #e5e7eb;
   --radius-card: 1rem;
   --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --accent: #2563eb;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --bg-app: #f8fafc;
+}
+/* details / summary 自定义视觉 */
+details.signal-row > summary { list-style: none; cursor: pointer; }
+details.signal-row > summary::-webkit-details-marker { display: none; }
+details.signal-row > summary::marker { content: ""; }
+details.signal-row > summary.signal-summary {
+  column-gap: 12px;
+  row-gap: 12px;
+}
+details.signal-row > summary::after {
+  content: "+"; margin-left: 8px; color: var(--text-muted);
+  font-weight: 600; font-size: 14px; line-height: 1;
+}
+details.signal-row[open] > summary::after { content: "−"; }
+/* 子信号明细表 tabs filter 隐藏规则 */
+table[data-active="left"] tr[data-category="right"] { display: none; }
+table[data-active="right"] tr[data-category="left"] { display: none; }
+.seg-btn { transition: background 120ms; }
+.seg-btn[data-on="1"] {
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
+  color: var(--text-primary);
 }
 </style>"""
 
@@ -73,6 +100,63 @@ def _resolve_right_state(confidence: float, thresholds: tuple[float, float]) -> 
     return "warning"
 
 
+# --- 左侧信号 3 态视觉规范 (基于 light 字段).
+_LEFT_STATE_TABLE: dict[str, tuple[str, str, str]] = {
+    "red": ("未触发", "var(--color-default)", "var(--color-default-100)"),
+    "yellow": ("观察", "var(--color-warning)", "var(--color-warning-100)"),
+    "green": ("确认", "var(--color-success)", "var(--color-success-100)"),
+}
+
+
+def _resolve_left_state(light: str) -> str:
+    """把 SignalResult.light 字符串映射为 _LEFT_STATE_TABLE 键。未知值兜底 'red'。"""
+    return light if light in _LEFT_STATE_TABLE else "red"
+
+
+def _compute_confirmation(signals: list[SignalResult]) -> dict:
+    """计算左右双侧加权 confidence 与总分。
+
+    各组 score_pct = round(100 * sum(c*w) / sum(w))。空组 score_pct/weight 均为 0。
+    confirmed_count = count(s.light == "green")。
+    """
+
+    def _group(group_signals: list[SignalResult]) -> dict:
+        weight = sum(s.weight for s in group_signals)
+        if weight == 0:
+            return {
+                "score_pct": 0,
+                "weight": 0,
+                "confirmed_count": 0,
+                "total_count": len(group_signals),
+            }
+        weighted = sum(s.confidence * s.weight for s in group_signals)
+        return {
+            "score_pct": int(round(100 * weighted / weight)),
+            "weight": weight,
+            "confirmed_count": sum(1 for s in group_signals if s.light == "green"),
+            "total_count": len(group_signals),
+        }
+
+    left_signals = [s for s in signals if s.category == "left"]
+    right_signals = [s for s in signals if s.category == "right"]
+    left = _group(left_signals)
+    right = _group(right_signals)
+
+    total_weight = left["weight"] + right["weight"]
+    if total_weight == 0:
+        score_pct = 0
+    else:
+        weighted_total = sum(s.confidence * s.weight for s in signals)
+        score_pct = int(round(100 * weighted_total / total_weight))
+
+    return {
+        "score_pct": score_pct,
+        "total_weight": total_weight,
+        "left": left,
+        "right": right,
+    }
+
+
 def render_html(
     ticker: str,
     name: str,
@@ -99,14 +183,13 @@ def render_html(
     left_signals = [s for s in signals if s.category == "left"]
     right_signals = [s for s in signals if s.category == "right"]
 
-    left_cards = "\n".join(_render_signal_card(s, i) for i, s in enumerate(left_signals))
-    right_cards = "\n".join(
-        _render_right_signal_card(s, i + 6) for i, s in enumerate(right_signals)
-    )
+    confirmation = _compute_confirmation(signals)
+    hero_html = _render_hero(phase, confirmation)
+    left_panel = _render_signal_group_panel("left", left_signals, confirmation["left"], 0)
+    right_panel = _render_signal_group_panel("right", right_signals, confirmation["right"], 6)
+    detail_table = _render_signal_detail_table(signals)
 
     design_tokens = _render_design_tokens()
-
-    strength_bar = _render_strength_bar(phase.strength)
 
     chart_json = json.dumps(chart_data or {}, ensure_ascii=False, default=str)
 
@@ -144,60 +227,39 @@ def render_html(
     <!-- Header -->
     <header class="mb-6">
       <div class="flex items-baseline gap-3 flex-wrap">
-        <h1 class="text-2xl md:text-3xl font-bold text-gray-900">{ticker}</h1>
-        <span class="text-gray-500 text-lg">{name}</span>
-        <span class="text-xl font-semibold text-gray-800">{price_str}</span>
+        <h1 class="text-2xl md:text-3xl font-bold" style="color: var(--text-primary);">{ticker}</h1>
+        <span class="text-lg" style="color: var(--text-secondary);">{name}</span>
+        <span class="text-xl font-semibold" style="color: var(--text-primary);">{price_str}</span>
         <span class="{change_color} text-sm font-medium">{change_str}</span>
       </div>
-      <p class="text-gray-400 text-xs mt-1">分析时间：{now}</p>
+      <p class="text-xs mt-1" style="color: var(--text-muted);">分析时间：{now}</p>
     </header>
 
-    <!-- Conclusion Card -->
-    <section class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 md:p-6 mb-6">
-      <div class="flex items-center gap-3 mb-3">
-        <span class="text-3xl">{phase.icon}</span>
-        <div>
-          <h2 class="text-xl font-bold text-gray-900">{phase.phase}</h2>
-          <p class="text-gray-500 text-sm">{phase.action}</p>
-        </div>
+    <!-- Hero: 圆环 + 加权公式 + 趋势主图 -->
+    {hero_html}
+
+    <!-- Narrative + Next Trigger -->
+    <section class="rounded-2xl p-5 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4 items-start"
+             style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
+      <div class="md:col-span-2">
+        <div class="text-[11px] uppercase tracking-wider mb-1.5" style="color: var(--text-muted);">综述</div>
+        <p class="text-sm leading-relaxed" style="color: var(--text-secondary);">{narrative}</p>
       </div>
-      <p class="text-sm text-blue-600 mb-4">📌 {phase.trigger}</p>
-      <div class="mt-3">
-        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
-          <span>综合强度</span>
-          <span class="font-semibold text-gray-800">{phase.strength_pct}%</span>
-        </div>
-        {strength_bar}
-        <div class="flex justify-between text-[10px] text-gray-400 mt-1">
-          <span>🔴 0-25%</span><span>🟡 25-45%</span><span>🟡⭐ 45-60%</span><span>🟢 60-80%</span><span>🟢🟢 80%+</span>
-        </div>
+      <div class="md:col-span-1 rounded-xl p-4"
+           style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider);">
+        <div class="text-[11px] uppercase tracking-wider mb-1" style="color: var(--text-muted);">下一触发</div>
+        <strong class="text-sm font-semibold" style="color: var(--text-primary);">{phase.trigger}</strong>
       </div>
     </section>
 
-    <!-- Narrative -->
-    <section class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
-      <h3 class="text-sm font-semibold text-gray-500 mb-2">综述</h3>
-      <p class="text-gray-700 text-sm leading-relaxed">{narrative}</p>
-    </section>
-
-    <!-- Left + Right Signals (side by side) -->
+    <!-- Signal Groups: 左右双大卡 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start mb-6">
-      <!-- Left Side Signals -->
-      <section>
-        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">左侧信号 · 底部特征</h3>
-        <div class="grid grid-cols-1 gap-3">
-          {left_cards}
-        </div>
-      </section>
-
-      <!-- Right Side Signals -->
-      <section>
-        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">右侧信号 · 趋势确认</h3>
-        <div class="grid grid-cols-1 gap-3">
-          {right_cards}
-        </div>
-      </section>
+      {left_panel}
+      {right_panel}
     </div>
+
+    <!-- 子信号明细表 + tabs -->
+    {detail_table}
 
     <!-- Footer -->
     <footer class="text-center text-xs pt-4" style="color: var(--color-default); border-top: 1px solid var(--color-divider);">
@@ -210,40 +272,91 @@ def render_html(
   <script>
     const DATA = {chart_json};
     const CHARTS = {{}};
+    const RENDERED_SIGNAL_CHARTS = new Set();
 
-    function initCharts() {{
+    function renderSignalChart(idx) {{
+      if (RENDERED_SIGNAL_CHARTS.has(idx)) return;
       if (!DATA.klines || !DATA.klines.length) return;
       const klines = DATA.klines;
       const indexKlines = DATA.index_klines || [];
       const vp = DATA.volume_profile || [];
+      const idxNum = Number(idx);
+      switch (idxNum) {{
+        case 0: renderVolumeChart('chart-0', klines); break;
+        case 1: renderPriceWithLevels('chart-1', klines, 'no_new_low'); break;
+        case 2: renderCandlestick('chart-2', klines); break;
+        case 3: renderATR('chart-3', klines); break;
+        case 4: renderVolumeProfile('chart-4', vp); break;
+        case 5: renderIndexChart('chart-5', indexKlines); break;
+        case 6: renderPriceWithMA('chart-6', klines); break;
+        case 7: renderCandlestickWithVolume('chart-7', klines); break;
+        case 8: renderMACD('chart-8', klines); break;
+        case 9: renderPriceWithLevels('chart-9', klines, 'higher_low'); break;
+        default: return;
+      }}
+      RENDERED_SIGNAL_CHARTS.add(idx);
+    }}
 
-      // Signal chart configs
-      const configs = {{
-        // S1: 缩量下跌 — 成交量柱状图 + MA5/MA20
-        0: () => renderVolumeChart('chart-0', klines),
-        // S2: 跌不动 — 价格折线 + 前低/近低标注
-        1: () => renderPriceWithLevels('chart-1', klines, 'no_new_low'),
-        // S3: 假破位收回 — K线 + 前低标注
-        2: () => renderCandlestick('chart-2', klines),
-        // S4: 波动收敛 — ATR 折线
-        3: () => renderATR('chart-3', klines),
-        // S5: 筹码集中 — Volume Profile
-        4: () => renderVolumeProfile('chart-4', vp),
-        // S6: 大盘环境 — 指数折线 + MA20
-        5: () => renderIndexChart('chart-5', indexKlines),
-        // S7: 站回均线 — 价格 + MA10/MA20
-        6: () => renderPriceWithMA('chart-6', klines),
-        // S8: 放量反包 — K线 + 成交量
-        7: () => renderCandlestickWithVolume('chart-7', klines),
-        // S9: MACD金叉 — MACD 图
-        8: () => renderMACD('chart-8', klines),
-        // S10: 低点抬升 — 价格折线 + 低点标注
-        9: () => renderPriceWithLevels('chart-9', klines, 'higher_low'),
-      }};
+    function renderHero() {{
+      if (!DATA.klines || !DATA.klines.length) return;
+      renderHeroTrendChart('chart-hero', DATA.klines);
+    }}
 
-      Object.entries(configs).forEach(([idx, fn]) => {{
-        const el = document.getElementById('chart-' + idx);
-        if (el) fn();
+    function renderHeroTrendChart(id, klines) {{
+      const el = document.getElementById(id);
+      if (!el) return;
+      const w = el.clientWidth || el.parentElement.clientWidth || 600;
+      const chart = LightweightCharts.createChart(el, {{
+        width: w, height: 320,
+        layout: {{ background: {{ color: '#ffffff' }}, textColor: '#94a3b8' }},
+        grid: {{ vertLines: {{ color: '#f3f4f6' }}, horzLines: {{ color: '#f3f4f6' }} }},
+        crosshair: {{ mode: 0 }},
+        rightPriceScale: {{ borderColor: '#e5e7eb' }},
+        timeScale: {{ borderColor: '#e5e7eb', timeVisible: false }},
+        handleScroll: false, handleScale: false,
+        localization: {{ locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' }},
+      }});
+      // 价格 area
+      const area = chart.addAreaSeries({{
+        lineColor: '#2563eb', topColor: 'rgba(37,99,235,0.25)', bottomColor: 'rgba(37,99,235,0.02)',
+        lineWidth: 2, priceScaleId: 'right',
+      }});
+      area.priceScale().applyOptions({{ scaleMargins: {{ top: 0.05, bottom: 0.32 }} }});
+      area.setData(klines.map(k => ({{ time: k.date, value: k.close }})));
+      // 成交量 histogram (下方 ~30%)
+      const vol = chart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, priceScaleId: 'vol' }});
+      vol.priceScale().applyOptions({{ scaleMargins: {{ top: 0.7, bottom: 0 }} }});
+      const volumes = klines.map((k, i) => {{
+        const isUp = i === 0 ? true : k.close >= klines[i-1].close;
+        return {{ time: k.date, value: k.volume, color: isUp ? '#dc262699' : '#16a34a99' }};
+      }});
+      vol.setData(volumes);
+      chart.timeScale().fitContent();
+      new ResizeObserver(() => chart.applyOptions({{ width: el.clientWidth }})).observe(el);
+    }}
+
+    function attachDetailsToggleListeners() {{
+      document.querySelectorAll('details[data-chart-idx]').forEach(d => {{
+        d.addEventListener('toggle', () => {{
+          if (!d.open) return;
+          const idx = d.getAttribute('data-chart-idx');
+          // 等浏览器先 layout,让容器拿到实际宽度
+          requestAnimationFrame(() => requestAnimationFrame(() => renderSignalChart(idx)));
+        }});
+      }});
+    }}
+
+    function attachSignalDetailTabs() {{
+      const table = document.getElementById('signal-detail-table');
+      if (!table) return;
+      const buttons = document.querySelectorAll('button[data-filter]');
+      buttons.forEach(btn => {{
+        btn.addEventListener('click', () => {{
+          const v = btn.getAttribute('data-filter');
+          table.setAttribute('data-active', v);
+          buttons.forEach(b => b.removeAttribute('data-on'));
+          btn.setAttribute('data-on', '1');
+        }});
       }});
     }}
 
@@ -470,7 +583,11 @@ def render_html(
       setTimeout(() => btn.textContent = '分析', 3000);
     }}
 
-    window.addEventListener('load', () => setTimeout(initCharts, 100));
+    window.addEventListener('load', () => setTimeout(() => {{
+      renderHero();
+      attachDetailsToggleListeners();
+      attachSignalDetailTabs();
+    }}, 100));
   </script>
 </body>
 </html>"""
@@ -560,15 +677,36 @@ def _render_signal_detail(s: SignalResult) -> str:
         s_trend = scores.get("trend", 0)
         s_div = scores.get("divergence", 0)
         conf_pct = int(round(s.confidence * 100))
+        formula_parts = [
+            ("量价背离", s_div, "30%"),
+            ("趋势缩量", s_trend, "25%"),
+            ("明显缩量", s_obvious, "20%"),
+            ("阶段缩量", s_stage, "15%"),
+            ("单日缩量", s_single, "10%"),
+        ]
+        formula_items = "".join(
+            f'<span class="inline-flex items-center gap-0.5 whitespace-nowrap">'
+            f'{label}(<b>{_fmt_score(score)}</b>)×{weight}'
+            f'</span>'
+            f'<span class="text-gray-300">+</span>'
+            for label, score, weight in formula_parts[:-1]
+        )
+        last_label, last_score, last_weight = formula_parts[-1]
+        formula_items += (
+            f'<span class="inline-flex items-center gap-0.5 whitespace-nowrap">'
+            f'{last_label}(<b>{_fmt_score(last_score)}</b>)×{last_weight}'
+            f'</span>'
+        )
         formula_html = (
-            f'<div class="mt-3 px-3 py-2 bg-gray-50 rounded-lg text-[11px] text-gray-500 leading-relaxed">'
-            f'<span class="font-medium text-gray-600">综合评分 = </span>'
-            f'量价背离(<b>{_fmt_score(s_div)}</b>)×30% + '
-            f'趋势缩量(<b>{_fmt_score(s_trend)}</b>)×25% + '
-            f'明显缩量(<b>{_fmt_score(s_obvious)}</b>)×20% + '
-            f'阶段缩量(<b>{_fmt_score(s_stage)}</b>)×15% + '
-            f'单日缩量(<b>{_fmt_score(s_single)}</b>)×10%'
-            f' = <b class="text-gray-800">{conf_pct}%</b>'
+            f'<div class="rounded-xl px-4 py-3 text-[11px] leading-relaxed" '
+            f'style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider); color: var(--text-secondary);">'
+            f'<div class="flex flex-wrap items-center gap-x-1.5 gap-y-1.5">'
+            f'<span class="font-medium" style="color: var(--text-primary);">综合评分 = </span>'
+            f'{formula_items}'
+            f'<span class="text-gray-300">=</span>'
+            f'<b class="inline-flex items-center rounded-md px-1.5 py-0.5 tabular-nums" '
+            f'style="background: var(--color-default-100); color: var(--text-primary);">{conf_pct}%</b>'
+            f'</div>'
             f'</div>'
         )
 
@@ -583,68 +721,70 @@ def _render_signal_detail(s: SignalResult) -> str:
     border: 7px solid transparent; border-top-color: #e5e7eb; }}
   .tooltip-wrap:hover .tooltip-bubble {{ display: block; }}
 </style>
-<div class="mt-3 text-xs">
+<div class="mt-4 text-xs">
   {formula_html}
-  <table class="w-full border-collapse mt-3" style="table-layout:fixed">
+  <div class="mt-4 overflow-x-auto rounded-xl" style="border: 1px solid var(--color-divider);">
+  <table class="w-full min-w-[760px] border-collapse" style="table-layout:fixed">
     <colgroup>
-      <col style="width:72px">
-      <col style="width:48px">
+      <col style="width:84px">
+      <col style="width:56px">
       <col style="width:22%">
       <col>
-      <col style="width:50px">
-      <col style="width:40px">
+      <col style="width:64px">
+      <col style="width:52px">
     </colgroup>
-    <thead><tr class="text-gray-400 border-b border-gray-200">
-      <th class="text-left py-1.5 font-medium">观察项</th>
-      <th class="text-center py-1.5 font-medium">权重</th>
-      <th class="text-left py-1.5 font-medium">判断标准</th>
-      <th class="text-left py-1.5 font-medium">数据明细</th>
-      <th class="text-center py-1.5 font-medium">比值</th>
-      <th class="text-center py-1.5 font-medium">状态</th>
+    <thead><tr class="text-gray-400 border-b border-gray-200" style="background: var(--color-surface-secondary);">
+      <th class="text-left px-3 py-2.5 font-medium">观察项</th>
+      <th class="text-center px-3 py-2.5 font-medium">权重</th>
+      <th class="text-left px-3 py-2.5 font-medium">判断标准</th>
+      <th class="text-left px-3 py-2.5 font-medium">数据明细</th>
+      <th class="text-center px-3 py-2.5 font-medium">比值</th>
+      <th class="text-center px-3 py-2.5 font-medium">状态</th>
     </tr></thead>
     <tbody class="text-gray-600">
       <tr class="border-b border-gray-50">
-        <td class="py-1.5 font-medium text-gray-700">单日缩量</td>
-        <td class="text-center py-1.5 text-gray-400">10%</td>
-        <td class="py-1.5">最近下跌日量 &lt; MA20</td>
-        <td class="py-1.5">{single_detail}</td>
-        <td class="text-center py-1.5">{single_ratio*100:.0f}%</td>
-        <td class="text-center py-1.5">{_dot(single_ratio)}</td>
+        <td class="px-3 py-2.5 font-medium text-gray-700">单日缩量</td>
+        <td class="text-center px-3 py-2.5 text-gray-400">10%</td>
+        <td class="px-3 py-2.5 leading-snug">最近下跌日量 &lt; MA20</td>
+        <td class="px-3 py-2.5 leading-snug">{single_detail}</td>
+        <td class="text-center px-3 py-2.5">{single_ratio*100:.0f}%</td>
+        <td class="text-center px-3 py-2.5">{_dot(single_ratio)}</td>
       </tr>
       <tr class="border-b border-gray-50">
-        <td class="py-1.5 font-medium text-gray-700">阶段缩量</td>
-        <td class="text-center py-1.5 text-gray-400">15%</td>
-        <td class="py-1.5">近期下跌日均量 &lt; MA20</td>
-        <td class="py-1.5">{stage_detail}</td>
-        <td class="text-center py-1.5">{stage_ratio*100:.0f}%</td>
-        <td class="text-center py-1.5">{_dot(stage_ratio)}</td>
+        <td class="px-3 py-2.5 font-medium text-gray-700">阶段缩量</td>
+        <td class="text-center px-3 py-2.5 text-gray-400">15%</td>
+        <td class="px-3 py-2.5 leading-snug">近期下跌日均量 &lt; MA20</td>
+        <td class="px-3 py-2.5 leading-snug">{stage_detail}</td>
+        <td class="text-center px-3 py-2.5">{stage_ratio*100:.0f}%</td>
+        <td class="text-center px-3 py-2.5">{_dot(stage_ratio)}</td>
       </tr>
       <tr class="border-b border-gray-50">
-        <td class="py-1.5 font-medium text-gray-700">明显缩量</td>
-        <td class="text-center py-1.5 text-gray-400">20%</td>
-        <td class="py-1.5">下跌日均量 &lt; MA20×80%</td>
-        <td class="py-1.5">{obvious_detail}</td>
-        <td class="text-center py-1.5">{stage_ratio*100:.0f}%</td>
-        <td class="text-center py-1.5">{_dot(stage_ratio, 0.8)}</td>
+        <td class="px-3 py-2.5 font-medium text-gray-700">明显缩量</td>
+        <td class="text-center px-3 py-2.5 text-gray-400">20%</td>
+        <td class="px-3 py-2.5 leading-snug">下跌日均量 &lt; MA20×80%</td>
+        <td class="px-3 py-2.5 leading-snug">{obvious_detail}</td>
+        <td class="text-center px-3 py-2.5">{stage_ratio*100:.0f}%</td>
+        <td class="text-center px-3 py-2.5">{_dot(stage_ratio, 0.8)}</td>
       </tr>
       <tr class="border-b border-gray-50">
-        <td class="py-1.5 font-medium text-gray-700">趋势缩量</td>
-        <td class="text-center py-1.5 text-gray-400">25%</td>
-        <td class="py-1.5">近一轮下跌量 &lt; 上一轮</td>
-        <td class="py-1.5">{tooltip_html}</td>
-        <td class="text-center py-1.5">{trend_cell}</td>
-        <td class="text-center py-1.5">{trend_dot}</td>
+        <td class="px-3 py-2.5 font-medium text-gray-700">趋势缩量</td>
+        <td class="text-center px-3 py-2.5 text-gray-400">25%</td>
+        <td class="px-3 py-2.5 leading-snug">近一轮下跌量 &lt; 上一轮</td>
+        <td class="px-3 py-2.5 leading-snug">{tooltip_html}</td>
+        <td class="text-center px-3 py-2.5">{trend_cell}</td>
+        <td class="text-center px-3 py-2.5">{trend_dot}</td>
       </tr>
       <tr>
-        <td class="py-1.5 font-medium text-gray-700">量价背离</td>
-        <td class="text-center py-1.5 text-gray-400">30%</td>
-        <td class="py-1.5">价创新低但量不创新低</td>
-        <td class="py-1.5">{div_info}</td>
-        <td class="text-center py-1.5">{div_cell}</td>
-        <td class="text-center py-1.5">{div_dot}</td>
+        <td class="px-3 py-2.5 font-medium text-gray-700">量价背离</td>
+        <td class="text-center px-3 py-2.5 text-gray-400">30%</td>
+        <td class="px-3 py-2.5 leading-snug">价创新低但量不创新低</td>
+        <td class="px-3 py-2.5 leading-snug">{div_info}</td>
+        <td class="text-center px-3 py-2.5">{div_cell}</td>
+        <td class="text-center px-3 py-2.5">{div_dot}</td>
       </tr>
     </tbody>
   </table>
+  </div>
   <p class="text-[10px] text-gray-400 mt-2">MA20 = 20日平均成交量（近1个月量能基准） · MA60 = 60日平均成交量（近3个月中长期量能基准）</p>
 </div>"""
     return ""
@@ -675,6 +815,264 @@ def _render_signal_card(s: SignalResult, chart_idx: int) -> str:
 </div>"""
 
 
+def _hero_strength_color_var(strength_pct: int) -> str:
+    """Hero 圆环色按综合强度区间映射。"""
+    if strength_pct < 25:
+        return "var(--color-danger)"
+    if strength_pct < 60:
+        return "var(--color-warning)"
+    return "var(--color-success)"
+
+
+def _render_hero_circle(phase: PhaseResult) -> str:
+    """Hero 左侧:SVG 圆环 + 中心 strength_pct + 下方 phase 名 + action。"""
+    pct = max(0, min(100, int(phase.strength_pct)))
+    radius = 42
+    circumference = 2 * 3.141592653589793 * radius  # ≈ 263.89
+    offset = circumference * (1 - pct / 100)
+    color_var = _hero_strength_color_var(pct)
+
+    return f"""<div class="flex flex-col items-center text-center gap-3 px-2">
+  <div class="relative" style="width: 116px; height: 116px;">
+    <svg viewBox="0 0 104 104" width="116" height="116" aria-hidden="true">
+      <circle cx="52" cy="52" r="{radius}" fill="none" stroke="var(--color-default-100)" stroke-width="8"></circle>
+      <circle cx="52" cy="52" r="{radius}" fill="none" stroke="{color_var}" stroke-width="8"
+              stroke-linecap="round" transform="rotate(-90 52 52)"
+              stroke-dasharray="{circumference:.2f}" stroke-dashoffset="{offset:.2f}"></circle>
+    </svg>
+    <div class="absolute inset-0 flex items-center justify-center">
+      <span class="text-3xl font-bold tabular-nums" style="color: var(--text-primary);">{pct}<span class="text-base font-medium" style="color: var(--text-muted);">%</span></span>
+    </div>
+  </div>
+  <div>
+    <div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">右侧趋势确认度</div>
+    <div class="text-lg font-bold mt-1" style="color: var(--text-primary);">{phase.phase}</div>
+    <div class="text-xs mt-1" style="color: var(--text-secondary);">{phase.action}</div>
+  </div>
+</div>"""
+
+
+def _render_hero_meter(side_label: str, group: dict, color_var: str) -> str:
+    """单侧 meter:meter-head + 进度条 + K/N 项确认 · 权重 W。"""
+    pct = group["score_pct"]
+    return f"""<div class="flex flex-col gap-1.5">
+  <div class="flex items-center justify-between text-xs" style="color: var(--text-secondary);">
+    <span>{side_label}</span>
+    <strong class="tabular-nums" style="color: var(--text-primary);">{pct}%</strong>
+  </div>
+  <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--color-default-100);">
+    <div class="h-full rounded-full" style="width: {pct}%; background: {color_var};"></div>
+  </div>
+  <p class="text-[11px]" style="color: var(--text-muted);">{group["confirmed_count"]}/{group["total_count"]} 项确认 · 权重 {group["weight"]}</p>
+</div>"""
+
+
+def _render_hero_formula(conf: dict) -> str:
+    """加权分公式 + 双 meter。"""
+    left = conf["left"]
+    right = conf["right"]
+    formula = (
+        f'<span class="font-medium" style="color: var(--text-secondary);">右侧趋势确认度 = </span>'
+        f'<strong class="tabular-nums" style="color: var(--text-primary);">{left["score_pct"]}%</strong>'
+        f'<span style="color: var(--text-muted);"> × </span>'
+        f'<strong class="tabular-nums" style="color: var(--text-primary);">{left["weight"]}</strong>'
+        f'<span style="color: var(--text-muted);">权重 + </span>'
+        f'<strong class="tabular-nums" style="color: var(--text-primary);">{right["score_pct"]}%</strong>'
+        f'<span style="color: var(--text-muted);"> × </span>'
+        f'<strong class="tabular-nums" style="color: var(--text-primary);">{right["weight"]}</strong>'
+        f'<span style="color: var(--text-muted);">权重</span>'
+    )
+    left_meter = _render_hero_meter("左侧信号", left, "var(--color-warning)")
+    right_meter = _render_hero_meter("右侧信号", right, "var(--color-success)")
+    return f"""<div class="flex flex-col gap-3 mt-4">
+  <div class="text-xs leading-relaxed" style="color: var(--text-secondary);">{formula}</div>
+  <div class="grid grid-cols-2 gap-4">
+    {left_meter}
+    {right_meter}
+  </div>
+</div>"""
+
+
+def _render_hero(phase: PhaseResult, conf: dict) -> str:
+    """Hero 双栏:左 1/3 圆环+phase+公式;右 2/3 lightweight-charts 主图容器。"""
+    circle = _render_hero_circle(phase)
+    formula = _render_hero_formula(conf)
+    return f"""<section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+  <div class="md:col-span-1 rounded-2xl p-5"
+       style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
+    {circle}
+    {formula}
+  </div>
+  <div class="md:col-span-2 rounded-2xl p-5"
+       style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
+    <div class="flex items-baseline justify-between mb-2">
+      <h3 class="text-sm font-semibold" style="color: var(--text-primary);">价格趋势 · 趋势确认轨迹</h3>
+      <span class="text-[11px]" style="color: var(--text-muted);">收盘价 + 成交量</span>
+    </div>
+    <div id="chart-hero" class="chart-container" style="height: 320px;"></div>
+  </div>
+</section>"""
+
+
+def _render_signal_row(s: SignalResult, chart_idx: int, side: str) -> str:
+    """双大卡内单行 details:summary 行 + 展开容器(可选 5 维详情 + chart)。"""
+    if side == "right":
+        state = _resolve_right_state(s.confidence, s.thresholds)
+        chip_label, color_var, color_100_var = _RIGHT_STATE_TABLE[state]
+    else:
+        state = _resolve_left_state(s.light)
+        chip_label, color_var, color_100_var = _LEFT_STATE_TABLE[state]
+
+    conf_pct = int(round(s.confidence * 100))
+
+    weight_badge = (
+        f'<span class="text-[10px] px-1 rounded ml-1" '
+        f'style="background: var(--color-default-100); color: var(--color-default);">×{s.weight}</span>'
+        if s.weight > 1
+        else ""
+    )
+
+    chip_html = (
+        f'<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" '
+        f'style="background: {color_100_var}; color: {color_var};">'
+        f'<span class="w-1.5 h-1.5 rounded-full" style="background: {color_var};"></span>'
+        f'{chip_label}'
+        f'</span>'
+    )
+
+    detail_html = _render_signal_detail(s)  # vol_shrink 才返回非空
+
+    return f"""<details class="signal-row" data-chart-idx="{chart_idx}">
+  <summary class="signal-summary flex items-start justify-between flex-wrap sm:flex-nowrap py-3"
+           style="border-top: 1px solid var(--color-divider);">
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <span class="text-sm font-semibold" style="color: var(--text-primary);">{s.name}</span>
+        {weight_badge}
+      </div>
+      <p class="text-xs mt-1" style="color: var(--text-secondary);">{s.description}</p>
+    </div>
+    <div class="flex items-center gap-3 shrink-0">
+      {chip_html}
+      <span class="text-sm font-semibold tabular-nums" style="color: {color_var}; min-width: 42px; text-align: right;">{conf_pct}%</span>
+    </div>
+  </summary>
+  <div class="pb-4 px-1">
+    {detail_html}
+    <div id="chart-{chart_idx}" class="chart-container"></div>
+  </div>
+</details>"""
+
+
+def _render_signal_group_panel(
+    side: str,
+    signals: list[SignalResult],
+    group: dict,
+    idx_offset: int,
+) -> str:
+    """单侧大卡:头部 + 信号列表(details 行)。"""
+    side_label = "左侧信号" if side == "left" else "右侧信号"
+    rows = "\n".join(
+        _render_signal_row(s, i + idx_offset, side) for i, s in enumerate(signals)
+    )
+    return f"""<section class="rounded-2xl p-5"
+         style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
+  <header class="flex items-start justify-between gap-3 mb-3">
+    <div>
+      <div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">{side_label}</div>
+      <h2 class="text-2xl font-bold mt-1 tabular-nums" style="color: var(--text-primary);">
+        {group["score_pct"]}%
+        <span class="text-sm font-medium ml-1" style="color: var(--text-secondary);">加权分</span>
+      </h2>
+    </div>
+    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs"
+          style="background: var(--color-default-100); color: var(--text-secondary);">
+      权重 <strong class="ml-0.5" style="color: var(--text-primary);">{group["weight"]}</strong>
+    </span>
+  </header>
+  <div>
+    {rows}
+  </div>
+</section>"""
+
+
+def _render_signal_detail_table(signals: list[SignalResult]) -> str:
+    """子信号明细表 + 全部/左/右 tabs。"""
+
+    def _row(s: SignalResult) -> str:
+        if s.category == "right":
+            state = _resolve_right_state(s.confidence, s.thresholds)
+            chip_label, color_var, color_100_var = _RIGHT_STATE_TABLE[state]
+            cat_label = "右侧"
+        else:
+            state = _resolve_left_state(s.light)
+            chip_label, color_var, color_100_var = _LEFT_STATE_TABLE[state]
+            cat_label = "左侧"
+        pct = int(round(s.confidence * 100))
+        chip = (
+            f'<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium" '
+            f'style="background: {color_100_var}; color: {color_var};">'
+            f'<span class="w-1.5 h-1.5 rounded-full" style="background: {color_var};"></span>'
+            f'{chip_label}</span>'
+        )
+        meter = (
+            f'<div class="flex items-center gap-2">'
+            f'<div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background: var(--color-default-100); min-width: 80px;">'
+            f'<div class="h-full rounded-full" style="width: {pct}%; background: {color_var};"></div>'
+            f'</div>'
+            f'<span class="text-xs tabular-nums shrink-0" style="color: {color_var}; min-width: 36px; text-align: right;">{pct}%</span>'
+            f'</div>'
+        )
+        return f"""<tr data-category="{s.category}" style="border-top: 1px solid var(--color-divider);">
+  <td class="py-2.5 pr-3 align-top" style="min-width: 220px;">
+    <div class="text-sm font-semibold" style="color: var(--text-primary);">{s.name}</div>
+    <div class="text-[11px] mt-0.5" style="color: var(--text-secondary);">{s.description}</div>
+  </td>
+  <td class="py-2.5 pr-3 text-xs align-top" style="color: var(--text-secondary);">{cat_label}</td>
+  <td class="py-2.5 pr-3 text-xs tabular-nums align-top" style="color: var(--text-secondary);">{s.weight}x</td>
+  <td class="py-2.5 pr-3 align-top">{chip}</td>
+  <td class="py-2.5 align-top" style="min-width: 140px;">{meter}</td>
+</tr>"""
+
+    rows = "\n".join(_row(s) for s in signals)
+
+    tabs_html = """<div class="inline-flex items-center gap-0 p-1 rounded-lg"
+       style="background: var(--color-default-100);" role="tablist" aria-label="信号筛选">
+    <button type="button" class="seg-btn px-3 py-1 rounded-md text-xs font-medium" data-filter="all" data-on="1" style="color: var(--text-secondary);">全部</button>
+    <button type="button" class="seg-btn px-3 py-1 rounded-md text-xs font-medium" data-filter="left" style="color: var(--text-secondary);">左侧</button>
+    <button type="button" class="seg-btn px-3 py-1 rounded-md text-xs font-medium" data-filter="right" style="color: var(--text-secondary);">右侧</button>
+  </div>"""
+
+    return f"""<section class="rounded-2xl p-5 mt-6"
+         style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
+  <header class="flex items-start justify-between gap-3 mb-4 flex-wrap">
+    <div>
+      <div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">子信号明细</div>
+      <h2 class="text-base font-semibold mt-1" style="color: var(--text-primary);">权重、确认度与状态</h2>
+    </div>
+    {tabs_html}
+  </header>
+  <div class="overflow-x-auto">
+    <table id="signal-detail-table" class="w-full text-left" data-active="all" style="border-collapse: collapse;">
+      <thead>
+        <tr style="color: var(--text-muted);">
+          <th class="text-[11px] font-medium py-2 pr-3 uppercase tracking-wider">信号</th>
+          <th class="text-[11px] font-medium py-2 pr-3 uppercase tracking-wider">类别</th>
+          <th class="text-[11px] font-medium py-2 pr-3 uppercase tracking-wider">权重</th>
+          <th class="text-[11px] font-medium py-2 pr-3 uppercase tracking-wider">状态</th>
+          <th class="text-[11px] font-medium py-2 uppercase tracking-wider">确认度</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows}
+      </tbody>
+    </table>
+  </div>
+</section>"""
+
+
+# DEPRECATED: 旧版独立信号卡渲染函数。port-codex-design-to-static-report 之后,
+# render_html 不再调用它。保留代码以满足前一个 spec (heroui-right-signals-redesign) 的兼容。
 def _render_right_signal_card(s: SignalResult, chart_idx: int) -> str:
     """右侧信号卡片：HeroUI 风格 Chip + Title + Description + ProgressBar。
 

@@ -7,6 +7,7 @@ import type {
   HealthResponse,
   Market,
   PEHistoryResponse,
+  SignalReportResponse,
   TimeRange,
   WatchlistItem,
   ApiErrorBody,
@@ -112,4 +113,15 @@ export function removeFromWatchlist(ticker: string): Promise<void> {
 
 export function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>(`/api/health`);
+}
+
+export function getSignalReport(
+  ticker: string,
+  options: { demo?: boolean } = {},
+): Promise<SignalReportResponse> {
+  const encoded = encodeURIComponent(ticker);
+  const demoQuery = options.demo ? "?demo=1" : "";
+  return request<SignalReportResponse>(
+    `/api/signal-report/${encoded}${demoQuery}`,
+  );
 }
