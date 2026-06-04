@@ -19,6 +19,60 @@ _LIGHT_COLORS = {
 _LIGHT_EMOJI = {"red": "🔴", "yellow": "🟡", "green": "🟢"}
 
 
+# --- HeroUI v3 design tokens (浅色主题). 通过内联 <style> 注入 :root.
+# 在 Tailwind CDN 路线下，配合 [color:var(--xxx)] 任意值类或内联 style 使用。
+_DESIGN_TOKENS_CSS = """<style>
+:root {
+  --color-default: #6b7280;
+  --color-default-100: #f3f4f6;
+  --color-success: #16a34a;
+  --color-success-100: #dcfce7;
+  --color-warning: #d97706;
+  --color-warning-100: #fef3c7;
+  --color-danger: #dc2626;
+  --color-danger-100: #fee2e2;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f8fafc;
+  --color-divider: #e5e7eb;
+  --radius-card: 1rem;
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+</style>"""
+
+
+def _render_design_tokens() -> str:
+    """返回内联的 HeroUI v3 设计 token <style> 块。"""
+    return _DESIGN_TOKENS_CSS
+
+
+# --- 右侧信号 4 态视觉规范.
+# (state_key) -> (chip_label, color_var, color_100_var)
+_RIGHT_STATE_TABLE: dict[str, tuple[str, str, str]] = {
+    "default": ("未触发", "var(--color-default)", "var(--color-default-100)"),
+    "warning-soft": ("酝酿中", "var(--color-warning)", "var(--color-warning-100)"),
+    "warning": ("临界", "var(--color-warning)", "var(--color-warning-100)"),
+    "success": ("已触发", "var(--color-success)", "var(--color-success-100)"),
+}
+
+# 在 [thresholds[0], thresholds[1]) 区间内进一步切分 warning-soft / warning.
+_RIGHT_TIER_BREAK: float = 0.55
+
+
+def _resolve_right_state(confidence: float, thresholds: tuple[float, float]) -> str:
+    """按 design D2 表把 confidence + thresholds 映射为 4 态键名。
+
+    返回值 ∈ {"default", "warning-soft", "warning", "success"}。
+    """
+    red_max, yellow_max = thresholds
+    if confidence >= yellow_max:
+        return "success"
+    if confidence < red_max:
+        return "default"
+    if confidence < _RIGHT_TIER_BREAK:
+        return "warning-soft"
+    return "warning"
+
+
 def render_html(
     ticker: str,
     name: str,
@@ -46,7 +100,11 @@ def render_html(
     right_signals = [s for s in signals if s.category == "right"]
 
     left_cards = "\n".join(_render_signal_card(s, i) for i, s in enumerate(left_signals))
-    right_cards = "\n".join(_render_signal_card(s, i + 6) for i, s in enumerate(right_signals))
+    right_cards = "\n".join(
+        _render_right_signal_card(s, i + 6) for i, s in enumerate(right_signals)
+    )
+
+    design_tokens = _render_design_tokens()
 
     strength_bar = _render_strength_bar(phase.strength)
 
@@ -60,9 +118,10 @@ def render_html(
   <title>{ticker} 信号诊断 — stock-farmer</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+  {design_tokens}
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "SF Pro", "Segoe UI", sans-serif; }}
-    .chart-container {{ height: 320px; border-radius: 8px; overflow: hidden; margin-top: 8px; border: 1px solid #e5e7eb; }}
+    .chart-container {{ height: 320px; border-radius: 8px; overflow: hidden; margin-top: 8px; border: 1px solid var(--color-divider); }}
   </style>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen">
@@ -115,31 +174,35 @@ def render_html(
       </div>
     </section>
 
-    <!-- Left Side Signals -->
-    <section class="mb-6">
-      <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">左侧信号 · 底部特征</h3>
-      <div class="grid grid-cols-1 gap-3">
-        {left_cards}
-      </div>
-    </section>
-
-    <!-- Right Side Signals -->
-    <section class="mb-6">
-      <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">右侧信号 · 趋势确认</h3>
-      <div class="grid grid-cols-1 gap-3">
-        {right_cards}
-      </div>
-    </section>
-
     <!-- Narrative -->
     <section class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
       <h3 class="text-sm font-semibold text-gray-500 mb-2">综述</h3>
       <p class="text-gray-700 text-sm leading-relaxed">{narrative}</p>
     </section>
 
+    <!-- Left + Right Signals (side by side) -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start mb-6">
+      <!-- Left Side Signals -->
+      <section>
+        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">左侧信号 · 底部特征</h3>
+        <div class="grid grid-cols-1 gap-3">
+          {left_cards}
+        </div>
+      </section>
+
+      <!-- Right Side Signals -->
+      <section>
+        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">右侧信号 · 趋势确认</h3>
+        <div class="grid grid-cols-1 gap-3">
+          {right_cards}
+        </div>
+      </section>
+    </div>
+
     <!-- Footer -->
-    <footer class="text-center text-xs text-gray-400 pt-4 border-t border-gray-200">
+    <footer class="text-center text-xs pt-4" style="color: var(--color-default); border-top: 1px solid var(--color-divider);">
       <p>仅供参考，不构成投资建议 · stock-farmer · {now}</p>
+      <p class="text-[10px] mt-1" style="color: var(--color-default);">右侧信号 4 态：未触发 / 酝酿中 / 临界 / 已触发</p>
     </footer>
 
   </div>
@@ -608,6 +671,58 @@ def _render_signal_card(s: SignalResult, chart_idx: int) -> str:
   {bar_html}
   <p class="text-xs text-gray-500 mt-2">{s.description}</p>
   {detail_html}
+  <div id="chart-{chart_idx}" class="chart-container"></div>
+</div>"""
+
+
+def _render_right_signal_card(s: SignalResult, chart_idx: int) -> str:
+    """右侧信号卡片：HeroUI 风格 Chip + Title + Description + ProgressBar。
+
+    采用 4 态视觉规范，不使用 emoji 状态指示，不展示阈值刻度尺。
+    """
+    state = _resolve_right_state(s.confidence, s.thresholds)
+    chip_label, color_var, color_100_var = _RIGHT_STATE_TABLE[state]
+    conf_pct = int(round(s.confidence * 100))
+
+    # 已触发：用次级 surface 强调；其它：默认 surface
+    bg_var = "var(--color-surface-secondary)" if state == "success" else "var(--color-surface)"
+
+    weight_badge = (
+        f'<span class="text-[10px] px-1 rounded" '
+        f'style="background: var(--color-default-100); color: var(--color-default);">×{s.weight}</span>'
+        if s.weight > 1
+        else ""
+    )
+
+    chip_html = (
+        f'<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" '
+        f'style="background: {color_100_var}; color: {color_var};">'
+        f'<span class="w-1.5 h-1.5 rounded-full" style="background: {color_var};"></span>'
+        f'{chip_label}'
+        f'</span>'
+    )
+
+    progress_html = (
+        f'<div class="flex items-center justify-between mb-1">'
+        f'<span class="text-[11px]" style="color: var(--color-default);">确定度</span>'
+        f'<output class="text-xs tabular-nums font-medium" style="color: {color_var};">{conf_pct}%</output>'
+        f'</div>'
+        f'<div class="h-1.5 rounded-full overflow-hidden" style="background: var(--color-default-100);">'
+        f'<div class="h-full rounded-full" style="width: {conf_pct}%; background: {color_var};"></div>'
+        f'</div>'
+    )
+
+    return f"""<div class="rounded-2xl p-4"
+     style="border:1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: {bg_var};">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-2">
+      {chip_html}
+      {weight_badge}
+    </div>
+  </div>
+  <h4 class="text-sm font-semibold" style="color: #0f172a;">{s.name}</h4>
+  <p class="text-xs mt-1 mb-3" style="color: var(--color-default);">{s.description}</p>
+  {progress_html}
   <div id="chart-{chart_idx}" class="chart-container"></div>
 </div>"""
 

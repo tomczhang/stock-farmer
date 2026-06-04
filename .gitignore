@@ -35,3 +35,5 @@ web/dist/
 
 # Logs
 *.log
+# heroui-agents-md
+.heroui-docs/
