@@ -1,11 +1,15 @@
-"""10 个信号的确定度计算。"""
+"""11 个信号的确定度计算。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+SUPPORT_STRONG_THRESHOLD = 0.60
+SUPPORT_ACTIONABLE_THRESHOLD = 0.35
 
 
 @dataclass
@@ -41,7 +45,7 @@ def _calc_vol_shrink(df: pd.DataFrame) -> SignalResult:
     2) 阶段缩量：近5-10个下跌日均量 < MA20
     3) 明显缩量：下跌日均量 < MA20 的 80%
     4) 趋势缩量：最近一轮下跌量能 < 上一轮下跌量能
-    5) 量价背离：股价创新低但成交量/OBV 不创新低
+    5) 量价背离：股价创新低但成交量低于前低，抛压边际减轻
     """
     thresholds = (0.35, 0.70)
     closes = df["close"].values
@@ -155,7 +159,7 @@ def _calc_vol_shrink(df: pd.DataFrame) -> SignalResult:
         trend_ratio = None
         score_trend = 0.0
 
-    # --- 维度5: 量价背离 — 价格创新低但成交量不创新低 ---
+    # --- 维度5: 量价背离 — 价格创新低但成交量低于前低 ---
     score_divergence = 0.0
     div_detail: dict = {}
     lows = df["low"].values
@@ -265,6 +269,360 @@ def _calc_no_new_low(df: pd.DataFrame) -> SignalResult:
 
 # ---------- S3: 假破位收回 ----------
 
+def _calc_atr(df: pd.DataFrame, window: int = 20) -> float:
+    highs = df["high"].astype(float).values
+    lows = df["low"].astype(float).values
+    closes = df["close"].astype(float).values
+    if len(df) < 2:
+        return float(np.mean(highs - lows)) if len(df) else 1.0
+    tr = []
+    for i in range(1, len(df)):
+        tr.append(max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        ))
+    atr = float(np.mean(tr[-window:])) if tr else float(np.mean(highs - lows))
+    return atr if atr > 0 else 1.0
+
+
+def _support_round_step(price: float) -> float:
+    if price >= 500:
+        return 20.0
+    if price >= 300:
+        return 10.0
+    if price >= 100:
+        return 5.0
+    if price >= 50:
+        return 2.0
+    return 1.0
+
+
+def _support_tolerance(current: float, atr: float) -> float:
+    return max(current * 0.015, atr * 0.8, 1.0)
+
+
+def _support_cluster_tolerance(current: float, atr: float) -> float:
+    """候选点聚合容忍度。
+
+    支撑识别可以用较宽容忍度判断破位，但最终区间展示必须更窄，
+    否则会把相邻支撑粘成一个很宽的带。
+    """
+    return max(current * 0.006, atr * 0.20, 1.5)
+
+
+def _support_stability_label(strength: float) -> str:
+    if strength >= SUPPORT_STRONG_THRESHOLD:
+        return "强"
+    if strength >= SUPPORT_ACTIONABLE_THRESHOLD:
+        return "中"
+    return "弱"
+
+
+def _support_display_role(zone: dict[str, Any], *, near: bool) -> str:
+    strength = float(zone.get("strength", 0.0) or 0.0)
+    if strength >= SUPPORT_STRONG_THRESHOLD:
+        return "下个强支撑"
+    if bool(zone.get("is_major_support")):
+        return "关键观察支撑，稳定性待确认"
+    if strength >= SUPPORT_ACTIONABLE_THRESHOLD:
+        return "下个中等支撑"
+    return "近端观察支撑，稳定性不足" if near else "观察支撑，稳定性不足"
+
+
+def _add_swing_low_candidates(
+    candidates: list[dict[str, Any]],
+    df: pd.DataFrame,
+    lookback: int,
+    source: str,
+) -> None:
+    lows = df["low"].astype(float).values
+    highs = df["high"].astype(float).values
+    volumes = df["volume"].astype(float).values
+    dates = df["date"].astype(str).values
+    n = len(df)
+    start = max(0, n - lookback)
+    swing = 3
+    idxs: set[int] = set()
+    for i in range(max(start + swing, swing), n - swing):
+        window = lows[i - swing:i + swing + 1]
+        if lows[i] <= float(np.min(window)):
+            idxs.add(i)
+    if n > start:
+        idxs.add(start + int(np.argmin(lows[start:])))
+
+    for i in sorted(idxs):
+        future_high = float(np.max(highs[i:min(n, i + 11)]))
+        rebound_pct = max(0.0, (future_high - lows[i]) / lows[i]) if lows[i] else 0.0
+        vol_window = volumes[max(0, i - 19):i + 1]
+        vol_base = float(np.mean(vol_window)) if len(vol_window) else 1.0
+        volume_ratio = volumes[i] / vol_base if vol_base else 1.0
+        recency = math.exp(-(n - 1 - i) / 120)
+        score = (
+            _clamp(rebound_pct / 0.12) * 0.45
+            + _clamp(volume_ratio / 2.0) * 0.25
+            + _clamp(recency) * 0.30
+        )
+        candidates.append({
+            "price": float(lows[i]),
+            "score": float(score),
+            "source": source,
+            "date": str(dates[i]),
+            "kind": "前低",
+        })
+
+
+def _add_platform_candidates(candidates: list[dict[str, Any]], df: pd.DataFrame) -> None:
+    lows = df["low"].astype(float).values
+    closes = df["close"].astype(float).values
+    dates = df["date"].astype(str).values
+    for window in (20, 30, 45, 60):
+        if len(df) < window:
+            continue
+        recent_lows = lows[-window:]
+        recent_closes = closes[-window:]
+        low_edge = float(np.quantile(recent_lows, 0.20))
+        high_edge = float(np.quantile(recent_closes, 0.80))
+        if low_edge <= 0:
+            continue
+        box_width = (high_edge - low_edge) / low_edge
+        if box_width > 0.12:
+            continue
+        touches = int(np.sum(np.abs(recent_lows - low_edge) / low_edge <= 0.025))
+        tightness_score = _clamp((0.12 - box_width) / 0.08)
+        duration_score = _clamp(window / 60)
+        touch_score = _clamp(touches / 4)
+        score = tightness_score * 0.45 + duration_score * 0.30 + touch_score * 0.25
+        candidates.append({
+            "price": low_edge,
+            "score": float(score),
+            "source": f"{window}日平台下沿",
+            "date": str(dates[-window]),
+            "kind": "平台下沿",
+        })
+
+
+def _add_integer_level_candidates(
+    candidates: list[dict[str, Any]],
+    current: float,
+    atr: float,
+) -> None:
+    if not candidates:
+        return
+    tolerance = _support_tolerance(current, atr)
+    prices = [float(c["price"]) for c in candidates]
+    min_level = max(min(prices), current * 0.75)
+    max_level = current * 1.05
+    step = _support_round_step(current)
+    level = math.floor(min_level / step) * step
+    while level <= max_level:
+        proximity = max(0.0, 1 - min(abs(level - p) for p in prices) / tolerance)
+        if proximity >= 0.35:
+            candidates.append({
+                "price": float(level),
+                "score": float(proximity),
+                "source": "整数关口",
+                "date": "",
+                "kind": "整数关口",
+            })
+        level += step
+
+
+def _calc_support_zones(df: pd.DataFrame) -> list[dict[str, Any]]:
+    if len(df) < 25:
+        return []
+    current = float(df["close"].astype(float).values[-1])
+    atr = _calc_atr(df, 20)
+    tolerance = _support_cluster_tolerance(current, atr)
+    candidates: list[dict[str, Any]] = []
+    _add_swing_low_candidates(candidates, df, 60, "近3个月前低")
+    _add_swing_low_candidates(candidates, df, 120, "近6个月前低")
+    _add_swing_low_candidates(candidates, df, 250, "近12个月前低")
+    _add_platform_candidates(candidates, df)
+    _add_integer_level_candidates(candidates, current, atr)
+
+    if not candidates:
+        return []
+
+    candidates = sorted(candidates, key=lambda c: float(c["price"]))
+    clusters: list[list[dict[str, Any]]] = []
+    for c in candidates:
+        price = float(c["price"])
+        if not clusters:
+            clusters.append([c])
+            continue
+        center = float(np.mean([float(x["price"]) for x in clusters[-1]]))
+        if abs(price - center) <= tolerance:
+            clusters[-1].append(c)
+        else:
+            clusters.append([c])
+
+    source_weights = {"前低": 0.40, "平台下沿": 0.35, "整数关口": 0.15}
+    zones: list[dict[str, Any]] = []
+    zone_pad = max(current * 0.003, atr * 0.12, 1.0)
+    for cluster in clusters:
+        prices = [float(c["price"]) for c in cluster]
+        center = float(np.average(prices, weights=[max(float(c["score"]), 0.05) for c in cluster]))
+        sources = sorted({str(c["source"]) for c in cluster})
+        kinds = sorted({str(c["kind"]) for c in cluster})
+        kind_scores: dict[str, float] = {}
+        for c in cluster:
+            kind = str(c["kind"])
+            kind_scores[kind] = max(kind_scores.get(kind, 0.0), float(c["score"]))
+        raw_confluence = sum(score * source_weights.get(kind, 0.2) for kind, score in kind_scores.items())
+        raw_low = float(min(prices) - zone_pad)
+        raw_high = float(max(prices) + zone_pad)
+        width_ratio = (raw_high - raw_low) / current if current else 1.0
+        width_penalty = _clamp(1 - width_ratio / 0.06, 0.35, 1.0)
+        diversity_bonus = {1: 0.0, 2: 0.08}.get(len(kinds), 0.15)
+        repeat_bonus = _clamp((len(sources) - len(kinds)) / 3) * 0.08
+        strength = _clamp((raw_confluence + diversity_bonus + repeat_bonus) * width_penalty)
+        is_major_support = (
+            "前低" in kinds
+            and (
+                any("近12个月" in source or "近6个月" in source for source in sources)
+                or len(sources) >= 3
+            )
+        )
+        zones.append({
+            "low": round(raw_low, 2),
+            "high": round(raw_high, 2),
+            "center": round(center, 2),
+            "strength": round(strength, 2),
+            "confluence": round(_clamp(raw_confluence * width_penalty), 2),
+            "stability_label": _support_stability_label(strength),
+            "is_major_support": is_major_support,
+            "sources": sources,
+            "kinds": kinds,
+            "candidate_count": len(cluster),
+            "width_pct": round(width_ratio * 100, 1),
+        })
+
+    zones = [
+        z for z in zones
+        if (
+            z["high"] >= current * 0.70
+            and z["center"] <= current * 1.02
+            and z["kinds"] != ["整数关口"]
+        )
+    ]
+    return _separate_support_zones(zones, current=current, atr=atr)[:5]
+
+
+def _separate_support_zones(
+    zones: list[dict[str, Any]],
+    current: float,
+    atr: float,
+) -> list[dict[str, Any]]:
+    """最终展示的支撑区间必须互不重叠。
+
+    候选点可以密集共振，但给用户看的区间如果重叠，会造成“到底看哪条”的歧义。
+    因此按离现价最近的上方支撑带优先，把更低一档支撑的上沿裁到上一档下方。
+    """
+    if not zones:
+        return []
+    min_gap = max(current * 0.003, atr * 0.10, 0.5)
+    ordered = sorted(
+        zones,
+        key=lambda z: (
+            0 if float(z["center"]) <= current * 1.02 else 1,
+            -float(z["center"]),
+            -float(z["strength"]),
+        ),
+    )
+    separated: list[dict[str, Any]] = []
+    for zone in ordered:
+        z = dict(zone)
+        low = float(z["low"])
+        high = float(z["high"])
+        for upper in separated:
+            upper_low = float(upper["low"])
+            if high >= upper_low:
+                high = min(high, upper_low - min_gap)
+        if high <= low:
+            continue
+        z["low"] = round(low, 2)
+        z["high"] = round(high, 2)
+        z["center"] = round((low + high) / 2, 2)
+        z["width_pct"] = round((high - low) / current * 100, 1) if current else z.get("width_pct", 0)
+        z["overlap_adjusted"] = z["high"] != zone["high"]
+        separated.append(z)
+    return separated
+
+
+def _select_active_support(zones: list[dict[str, Any]], current: float) -> dict[str, Any] | None:
+    if not zones:
+        return None
+    eligible = [z for z in zones if float(z["low"]) <= current * 1.03]
+    if not eligible:
+        eligible = zones
+    actionable = [z for z in eligible if float(z.get("strength", 0.0) or 0.0) >= SUPPORT_ACTIONABLE_THRESHOLD]
+    pool = actionable or eligible
+    pool.sort(key=lambda z: (
+        0 if float(z["center"]) <= current else 1,
+        abs(current - float(z["center"])),
+        -float(z["strength"]),
+    ))
+    return pool[0]
+
+
+def _support_level(strength: float) -> str:
+    return _support_stability_label(strength)
+
+
+def _select_display_support_zones(
+    zones: list[dict[str, Any]],
+    current: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """选择用户真正关心的支撑位。
+
+    完整候选用于计算，图表只显示：离现价最近的弱/中支撑，以及下方主支撑。
+    """
+    below = sorted(
+        [z for z in zones if float(z["center"]) < current],
+        key=lambda z: -float(z["center"]),
+    )
+    near_support = below[0] if below else None
+    strict_strong_support = next(
+        (z for z in below if float(z["strength"]) >= SUPPORT_STRONG_THRESHOLD),
+        None,
+    )
+    main_candidates = [
+        z for z in below
+        if not near_support or float(z["high"]) < float(near_support["low"]) * 0.98
+    ]
+    major_support = max(
+        main_candidates,
+        key=lambda z: (
+            bool(z.get("is_major_support")),
+            float(z.get("strength", 0.0) or 0.0),
+            -abs(current - float(z["center"])),
+        ),
+    ) if main_candidates else None
+    main_support = strict_strong_support or major_support
+
+    display: list[dict[str, Any]] = []
+    if near_support:
+        z = dict(near_support)
+        z["display_role"] = _support_display_role(z, near=True)
+        display.append(z)
+    if main_support and (
+        not near_support or float(main_support["center"]) != float(near_support["center"])
+    ):
+        z = dict(main_support)
+        z["display_role"] = _support_display_role(z, near=False)
+        display.append(z)
+
+    return display, {
+        "has_near_support": near_support is not None,
+        "has_main_support": main_support is not None,
+        "has_strong_support": strict_strong_support is not None,
+        "has_strict_strong_support": strict_strong_support is not None,
+        "strong_threshold": SUPPORT_STRONG_THRESHOLD,
+        "actionable_threshold": SUPPORT_ACTIONABLE_THRESHOLD,
+    }
+
+
 def _calc_false_breakdown(df: pd.DataFrame) -> SignalResult:
     thresholds = (0.30, 0.60)
     if len(df) < 25:
@@ -273,32 +631,108 @@ def _calc_false_breakdown(df: pd.DataFrame) -> SignalResult:
             confidence=0.0, light="red", thresholds=thresholds, weight=2,
             description="数据不足", data={},
         )
-    lows = df["low"].values
-    closes = df["close"].values
+    lows = df["low"].astype(float).values
+    closes = df["close"].astype(float).values
+    volumes = df["volume"].astype(float).values
+    dates = df["date"].astype(str).values
+    current = float(closes[-1])
+    atr = _calc_atr(df, 20)
+    support_zones = _calc_support_zones(df)
+    display_support_zones, support_focus = _select_display_support_zones(support_zones, current)
+    active_support = next(
+        (
+            z for z in display_support_zones
+            if float(z.get("strength", 0.0) or 0.0) >= SUPPORT_STRONG_THRESHOLD
+        ),
+        None,
+    )
     prev_low = float(np.min(lows[-25:-5]))
+    support_low = float(active_support["low"]) if active_support else prev_low
+    support_high = float(active_support["high"]) if active_support else prev_low
+    support_strength = float(active_support.get("strength", 0.0)) if active_support else 0.0
+    support_quality = _clamp(support_strength / 0.60) if active_support else 0.5
+    min_actionable_support = SUPPORT_STRONG_THRESHOLD
 
-    # 检查近10日内是否有破前低又收回的情况
     conf = 0.0
-    desc = "近期未出现破位后收回形态"
-    for i in range(-10, -1):
-        if lows[i] < prev_low:
-            breach_depth = prev_low - lows[i]
-            # 检查后续3日是否收回
-            recovery_window = closes[i+1:min(i+4, 0) or len(closes)]
-            if len(recovery_window) > 0 and float(np.max(recovery_window)) > prev_low:
-                atr = float(np.mean(df["high"].values[-14:] - df["low"].values[-14:]))
-                if atr == 0:
-                    atr = 1.0
-                depth_score = _clamp(1 - breach_depth / atr)
-                speed_score = 1.0  # recovered within window
-                conf = _clamp((depth_score * 0.5 + speed_score * 0.5))
-                desc = f"破前低 {prev_low:.2f} 后快速收回，破位深度 {breach_depth:.2f}"
-                break
+    pattern_conf = 0.0
+    event: dict[str, Any] = {}
+    desc = (
+        f"近期未出现跌破支撑区间 {support_low:.2f}–{support_high:.2f} 后收回"
+        if active_support else "近期未出现破位后收回形态"
+    )
+    if not active_support:
+        desc = "未识别到稳定性 ≥60% 的强支撑，暂不展示假破位收回"
+        return SignalResult(
+            id="false_breakdown", name="假破位收回", category="left",
+            confidence=0.0, light=_to_light(0.0, thresholds), thresholds=thresholds, weight=2,
+            description=desc,
+            data={
+                "prev_low": prev_low,
+                "conf": 0.0,
+                "pattern_conf": 0.0,
+                "support_quality": support_quality,
+                "support_zones": support_zones,
+                "display_support_zones": display_support_zones,
+                "support_focus": support_focus,
+                "active_support": {},
+                "breakdown_event": {},
+                "atr20": atr,
+                "min_actionable_support": min_actionable_support,
+            },
+        )
+    start = max(0, len(df) - 10)
+    vol20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else float(np.mean(volumes))
+    for i in range(start, len(df)):
+        if lows[i] >= support_low:
+            continue
+        for j in range(i, min(len(df), i + 4)):
+            if closes[j] < support_high:
+                continue
+            breach_depth = support_low - lows[i]
+            recover_days = j - i
+            depth_score = _clamp(breach_depth / max(atr, 1.0))
+            strength_score = _clamp((closes[j] - support_high) / max(atr, 1.0))
+            speed_score = _clamp(1 - recover_days / 3)
+            volume_score = _clamp(volumes[j] / vol20 - 0.8) if vol20 else 0.0
+            pattern_conf = _clamp(
+                depth_score * 0.30
+                + strength_score * 0.30
+                + speed_score * 0.25
+                + volume_score * 0.15
+            )
+            conf = _clamp(pattern_conf * support_quality)
+            event = {
+                "break_date": str(dates[i]),
+                "break_low": float(lows[i]),
+                "recover_date": str(dates[j]),
+                "recover_close": float(closes[j]),
+                "recover_days": int(recover_days),
+                "breach_depth": float(breach_depth),
+            }
+            desc = (
+                f"跌破支撑区间 {support_low:.2f}–{support_high:.2f} 后"
+                f"{recover_days}日收回，但支撑稳定性 {support_strength*100:.0f}% 偏低"
+            )
+            break
+        if event:
+            break
 
     return SignalResult(
         id="false_breakdown", name="假破位收回", category="left",
         confidence=conf, light=_to_light(conf, thresholds), thresholds=thresholds, weight=2,
-        description=desc, data={"prev_low": prev_low, "conf": conf},
+        description=desc,
+        data={
+            "prev_low": prev_low,
+            "conf": conf,
+            "pattern_conf": pattern_conf,
+            "support_quality": support_quality,
+            "support_zones": support_zones,
+            "display_support_zones": display_support_zones,
+            "support_focus": support_focus,
+            "active_support": active_support or {},
+            "breakdown_event": event,
+            "atr20": atr,
+        },
     )
 
 
@@ -474,7 +908,156 @@ def _calc_volume_breakout(df: pd.DataFrame) -> SignalResult:
     )
 
 
-# ---------- S9: MACD 金叉 ----------
+# ---------- S9: 回踩不破 ----------
+
+def _calc_support_retest_hold(
+    df: pd.DataFrame,
+    false_breakdown: SignalResult | None = None,
+) -> SignalResult:
+    thresholds = (0.35, 0.70)
+    if len(df) < 25:
+        return SignalResult(
+            id="support_retest_hold", name="回踩不破", category="right",
+            confidence=0.0, light="red", thresholds=thresholds, weight=2,
+            description="数据不足", data={},
+        )
+
+    false_signal = false_breakdown or _calc_false_breakdown(df)
+    false_data = false_signal.data or {}
+    support = false_data.get("active_support") or {}
+    breakdown_event = false_data.get("breakdown_event") or {}
+    support_low = float(support.get("low", 0) or 0)
+    support_high = float(support.get("high", 0) or 0)
+    support_strength = float(support.get("strength", 0) or 0)
+    support_quality = _clamp(support_strength / 0.60) if support else 0.0
+    atr = float(false_data.get("atr20") or _calc_atr(df, 20))
+
+    base_data = {
+        "support_zones": false_data.get("support_zones", []),
+        "display_support_zones": false_data.get("display_support_zones", []),
+        "support_focus": false_data.get("support_focus", {}),
+        "active_support": support,
+        "breakdown_event": breakdown_event,
+        "retest_event": {},
+        "atr20": atr,
+    }
+
+    if not support or support_low <= 0 or support_high <= 0:
+        return SignalResult(
+            id="support_retest_hold", name="回踩不破", category="right",
+            confidence=0.0, light="red", thresholds=thresholds, weight=2,
+            description="未识别到可用支撑区间，无法判断回踩确认",
+            data=base_data,
+        )
+
+    if not breakdown_event.get("recover_date"):
+        return SignalResult(
+            id="support_retest_hold", name="回踩不破", category="right",
+            confidence=0.0, light="red", thresholds=thresholds, weight=2,
+            description="尚未出现假破位收回，无法进入回踩确认",
+            data=base_data,
+        )
+
+    lows = df["low"].astype(float).values
+    closes = df["close"].astype(float).values
+    dates = df["date"].astype(str).values
+    recover_date = str(breakdown_event["recover_date"])
+    recover_matches = np.where(dates == recover_date)[0]
+    if len(recover_matches) == 0:
+        return SignalResult(
+            id="support_retest_hold", name="回踩不破", category="right",
+            confidence=0.0, light="red", thresholds=thresholds, weight=2,
+            description="收回日期缺失，无法跟踪后续回踩",
+            data=base_data,
+        )
+
+    recover_idx = int(recover_matches[-1])
+    retest_tolerance = max(atr * 0.25, support_high * 0.006, 0.5)
+    break_buffer = max(atr * 0.10, support_low * 0.003, 0.2)
+    retest_event: dict[str, Any] = {}
+    failed_event: dict[str, Any] = {}
+
+    for i in range(recover_idx + 1, len(df)):
+        if lows[i] < support_low - break_buffer or closes[i] < support_low:
+            failed_event = {
+                "date": str(dates[i]),
+                "low": float(lows[i]),
+                "close": float(closes[i]),
+            }
+            break
+        touched = lows[i] <= support_high + retest_tolerance
+        if touched:
+            zone_width = max(support_high - support_low, atr * 0.20, 0.01)
+            touch_score = 1.0 if lows[i] <= support_high else _clamp(
+                1 - (lows[i] - support_high) / retest_tolerance
+            )
+            close_hold_score = 1.0 if closes[i] >= support_high else _clamp(
+                (closes[i] - support_low) / zone_width
+            )
+            low_hold_score = 1.0 if lows[i] >= support_low else _clamp(
+                1 - (support_low - lows[i]) / break_buffer
+            )
+            conf = _clamp(
+                touch_score * 0.25
+                + close_hold_score * 0.35
+                + low_hold_score * 0.25
+                + support_quality * 0.15
+            )
+            retest_event = {
+                "date": str(dates[i]),
+                "low": float(lows[i]),
+                "close": float(closes[i]),
+                "days_after_recover": int(i - recover_idx),
+                "touch_score": float(touch_score),
+                "close_hold_score": float(close_hold_score),
+                "low_hold_score": float(low_hold_score),
+            }
+            base_data["retest_event"] = retest_event
+            return SignalResult(
+                id="support_retest_hold", name="回踩不破", category="right",
+                confidence=conf, light=_to_light(conf, thresholds), thresholds=thresholds, weight=2,
+                description=(
+                    f"收回后第{i - recover_idx}日回踩支撑区间 "
+                    f"{support_low:.2f}–{support_high:.2f}，收盘 {closes[i]:.2f} 守住"
+                ),
+                data=base_data,
+            )
+
+    if failed_event:
+        base_data["retest_event"] = failed_event | {"failed": True}
+        return SignalResult(
+            id="support_retest_hold", name="回踩不破", category="right",
+            confidence=0.0, light="red", thresholds=thresholds, weight=2,
+            description=(
+                f"收回后再次跌回支撑区间 {support_low:.2f}–{support_high:.2f} 下方，"
+                f"回踩确认失败"
+            ),
+            data=base_data,
+        )
+
+    close = float(closes[-1])
+    if close >= support_high:
+        conf = 0.35
+        desc = (
+            f"已收回支撑区间 {support_low:.2f}–{support_high:.2f}，"
+            "但尚未出现明确回踩，等待不破确认"
+        )
+    else:
+        conf = 0.20
+        desc = (
+            f"收回后价格靠近支撑区间 {support_low:.2f}–{support_high:.2f}，"
+            "尚未完成回踩确认"
+        )
+
+    return SignalResult(
+        id="support_retest_hold", name="回踩不破", category="right",
+        confidence=conf, light=_to_light(conf, thresholds), thresholds=thresholds, weight=2,
+        description=desc,
+        data=base_data,
+    )
+
+
+# ---------- S10: MACD 金叉 ----------
 
 def _calc_macd_cross(df: pd.DataFrame) -> SignalResult:
     thresholds = (0.35, 0.70)
@@ -514,7 +1097,7 @@ def _calc_macd_cross(df: pd.DataFrame) -> SignalResult:
     )
 
 
-# ---------- S10: 低点抬升 ----------
+# ---------- S11: 低点抬升 ----------
 
 def _calc_higher_low(df: pd.DataFrame) -> SignalResult:
     thresholds = (0.35, 0.70)
@@ -554,15 +1137,17 @@ def compute_all_signals(
     volume_profile: list | None = None,
     index_df: pd.DataFrame | None = None,
 ) -> list[SignalResult]:
-    """计算全部 10 个信号，返回 SignalResult 列表。"""
+    """计算全部 11 个信号，返回 SignalResult 列表。"""
+    false_breakdown = _calc_false_breakdown(df)
     return [
         _calc_vol_shrink(df),
         _calc_no_new_low(df),
-        _calc_false_breakdown(df),
+        false_breakdown,
         _calc_vol_contraction(df),
         _calc_chip_concentration(volume_profile or []),
         _calc_market_env(index_df),
         _calc_above_ma(df),
+        _calc_support_retest_hold(df, false_breakdown=false_breakdown),
         _calc_volume_breakout(df),
         _calc_macd_cross(df),
         _calc_higher_low(df),

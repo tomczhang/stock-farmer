@@ -159,6 +159,156 @@ def test_render_html_footer_has_4_state_legend():
         assert word in footer, f"footer missing 4-state word: {word}"
 
 
+def test_render_html_falls_back_to_kline_change_pct():
+    chart_data = {
+        "klines": [
+            {"date": "2026-01-01", "close": 100},
+            {"date": "2026-01-02", "close": 105},
+        ]
+    }
+    html = render_html("AAPL", "Apple", None, None, _make_signals(), _make_phase(), "narrative", chart_data)
+    header = html.split("<!-- Header -->")[1].split("<!-- Hero")[0]
+    assert "$105.00" in header
+    assert "+5.00%" in header
+
+
+def test_render_html_injects_support_zone_chart_data():
+    signals = [
+        SignalResult(
+            id="false_breakdown", name="假破位收回", category="left",
+            confidence=0.2, light="red", thresholds=(0.3, 0.6), weight=2,
+            description="跌破支撑区间观察",
+            data={
+                "support_zones": [
+                    {
+                        "low": 418.5, "high": 425.5, "center": 421.0,
+                        "strength": 0.72, "sources": ["近3个月前低", "整数关口"],
+                    }
+                ],
+                "display_support_zones": [
+                    {
+                        "low": 418.5, "high": 425.5, "center": 421.0,
+                        "strength": 0.72, "sources": ["近3个月前低", "整数关口"],
+                        "display_role": "下个强支撑",
+                    }
+                ],
+                "support_focus": {"has_strong_support": True},
+                "active_support": {"low": 418.5, "high": 425.5},
+                "breakdown_event": {},
+            },
+        ),
+    ] + [
+        SignalResult(
+            id=f"L{i}", name=f"L{i}", category="left", confidence=0.5, light="yellow",
+            thresholds=(0.35, 0.7), weight=1, description="x", data={},
+        )
+        for i in range(5)
+    ] + [
+        SignalResult(
+            id=f"R{i}", name=f"R{i}", category="right", confidence=0.5, light="yellow",
+            thresholds=(0.4, 0.7), weight=1, description="x", data={},
+        )
+        for i in range(4)
+    ]
+    chart_data = {
+        "klines": [
+            {"date": "2026-01-01", "open": 430, "high": 435, "low": 420, "close": 428, "volume": 1_000_000},
+            {"date": "2026-01-02", "open": 428, "high": 432, "low": 421, "close": 429, "volume": 1_100_000},
+        ]
+    }
+    html = render_html("0700.HK", "腾讯控股", 429.0, 0.2, signals, _make_phase(), "n", chart_data)
+    assert "renderSupportChart('chart-2'" in html
+    assert "createSupportChart" in html
+    assert "aggregateWeeklyKlines" in html
+    assert "aggregateMonthlyKlines" in html
+    assert "weekTimeForDate" in html
+    assert "handleScale: false" in html
+    assert "handleScroll: false" in html
+    assert "priceLineVisible: true" in html
+    assert "lastValueVisible: true" in html
+    assert "upColor: 'rgba(220, 38, 38, 0)'" in html
+    assert "borderVisible: true" in html
+    assert "borderUpColor: '#dc2626'" in html
+    assert "downColor: '#16a34a'" in html
+    assert "axisLabelVisible: true" in html
+    assert "data-support-tf=\"day\"" in html
+    assert "data-support-tf=\"week\"" in html
+    assert "data-support-tf=\"month\"" in html
+    assert "支撑位怎么判断" in html
+    assert "前低、平台下沿、整数关口都算候选" in html
+    assert "价格足够接近的候选会合成一个支撑区间" in html
+    assert "共振表示这些证据在同一区间重合的程度" in html
+    assert "强支撑门槛：稳定性 ≥60%" in html
+    assert "关键观察支撑可以用于跟踪和风控，但不等同于强支撑" in html
+    assert "barSpacing: 8" in html
+    assert '"signal_data"' in html
+    assert '"support_zones"' in html
+    assert '"display_support_zones"' in html
+    assert '"low": 418.5' in html
+    assert "下个强支撑" in html
+    assert "支撑上沿" not in html
+    assert "支撑下沿" not in html
+    assert "support-zone-legend" in html
+    assert "支撑稳定性" in html
+    assert "support-tip-bubble" in html
+    assert "支撑稳定性综合前低、平台、整数位、候选重复度和区间宽度" in html
+    assert "关键观察支撑表示结构重要但稳定性待确认" in html
+    assert "弱：<35%，中：35%–59%，强：≥60%" in html
+    assert "mouseenter" in html
+    assert "pointerenter" in html
+    assert "click" in html
+
+
+def test_volume_signal_chart_limits_visible_daily_klines():
+    html = render_html("AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "narrative")
+
+    assert "const VOLUME_SIGNAL_VISIBLE_DAYS = 120" in html
+    assert "const visibleKlines = klines.slice(-VOLUME_SIGNAL_VISIBLE_DAYS)" in html
+    assert "candleSeries.setData(visibleKlines.map" in html
+    assert ".filter(p => p && visibleTimes.has(p.time))" in html
+
+
+def test_render_html_support_chart_shows_no_strong_placeholder():
+    sigs = [
+        SignalResult(
+            id="false_breakdown", name="假破位收回", category="left",
+            confidence=0.2, light="red", thresholds=(0.3, 0.6), weight=2,
+            description="弱支撑观察",
+            data={
+                "display_support_zones": [
+                    {
+                        "low": 450.0, "high": 455.0, "center": 452.5,
+                        "strength": 0.25, "sources": ["近3个月前低"],
+                        "display_role": "关键观察支撑，稳定性待确认",
+                    }
+                ],
+                "support_focus": {"has_strong_support": False},
+                "support_zones": [],
+            },
+        ),
+    ] + [
+        SignalResult(
+            id=f"L{i}", name=f"L{i}", category="left", confidence=0.5, light="yellow",
+            thresholds=(0.35, 0.7), weight=1, description="x", data={},
+        )
+        for i in range(5)
+    ] + [
+        SignalResult(
+            id=f"R{i}", name=f"R{i}", category="right", confidence=0.5, light="yellow",
+            thresholds=(0.4, 0.7), weight=1, description="x", data={},
+        )
+        for i in range(4)
+    ]
+    chart_data = {
+        "klines": [
+            {"date": "2026-01-01", "open": 460, "high": 462, "low": 450, "close": 459, "volume": 1_000_000},
+        ]
+    }
+    html = render_html("0700.HK", "腾讯控股", 459.0, -1.0, sigs, _make_phase(), "n", chart_data)
+    assert "关键观察支撑，稳定性待确认" in html
+    assert "下个强支撑：暂无" in html
+
+
 def test_state_table_keys():
     assert set(_RIGHT_STATE_TABLE.keys()) == {"default", "warning-soft", "warning", "success"}
     assert {"red", "yellow", "green"}.issubset(set(_LEFT_STATE_TABLE.keys()))
@@ -350,9 +500,11 @@ def test_render_html_vol_shrink_5dim_in_details():
         for i in range(4)
     ]
     html = render_html("X", "X", 1.0, 0.0, sigs, _make_phase(), "n")
-    # 5 维表头 + 公式标志同时存在
-    for token in ("综合评分 = ", "观察项", "判断标准", "数据明细", "比值"):
+    # 5 维表头 + 公式标志同时存在；比值已合并到数据明细中。
+    for token in ("综合评分 = ", "观察项", "判断标准", "数据明细", "实际/基准"):
         assert token in html, f"vol_shrink table token missing: {token}"
+    assert "比值" not in html
+    assert "MA20×80%=80万，实际/基准=100%" in html
 
 
 def test_render_html_no_threshold_ruler_in_hero_or_panels():

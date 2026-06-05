@@ -64,6 +64,21 @@ table[data-active="right"] tr[data-category="left"] { display: none; }
   box-shadow: var(--shadow-xs);
   color: var(--text-primary);
 }
+.report-shell {
+  max-width: 72rem;
+}
+.signal-groups-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 1920px) {
+  .report-shell {
+    max-width: min(1760px, calc(100vw - 96px));
+  }
+  .signal-groups-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 </style>"""
 
 
@@ -176,6 +191,22 @@ def render_html(
     }
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    klines = (chart_data or {}).get("klines") or []
+    if price is None and klines:
+        try:
+            price = float(klines[-1]["close"])
+        except (KeyError, TypeError, ValueError):
+            price = None
+    if change_pct is None and price is not None and klines:
+        try:
+            ref_close = float(klines[-1]["close"])
+            if abs(float(price) - ref_close) < 1e-9 and len(klines) >= 2:
+                ref_close = float(klines[-2]["close"])
+            if ref_close:
+                change_pct = (float(price) - ref_close) / ref_close * 100
+        except (KeyError, TypeError, ValueError):
+            change_pct = None
+
     price_str = f"${price:.2f}" if price else "N/A"
     change_str = f"{change_pct:+.2f}%" if change_pct is not None else ""
     change_color = "text-green-600" if (change_pct or 0) >= 0 else "text-red-600"
@@ -191,7 +222,9 @@ def render_html(
 
     design_tokens = _render_design_tokens()
 
-    chart_json = json.dumps(chart_data or {}, ensure_ascii=False, default=str)
+    chart_payload = dict(chart_data or {})
+    chart_payload["signal_data"] = {s.id: s.data for s in signals}
+    chart_json = json.dumps(chart_payload, ensure_ascii=False, default=str)
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -208,7 +241,7 @@ def render_html(
   </style>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen">
-  <div class="max-w-6xl mx-auto px-6 py-6 md:py-10">
+  <div class="report-shell mx-auto px-6 py-6 md:py-10">
 
     <!-- Nav + Quick Analyze -->
     <nav class="flex items-center justify-between mb-6 gap-3">
@@ -253,7 +286,7 @@ def render_html(
     </section>
 
     <!-- Signal Groups: 左右双大卡 -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start mb-6">
+    <div class="signal-groups-grid gap-6 items-start mb-6">
       {left_panel}
       {right_panel}
     </div>
@@ -264,7 +297,7 @@ def render_html(
     <!-- Footer -->
     <footer class="text-center text-xs pt-4" style="color: var(--color-default); border-top: 1px solid var(--color-divider);">
       <p>仅供参考，不构成投资建议 · stock-farmer · {now}</p>
-      <p class="text-[10px] mt-1" style="color: var(--color-default);">右侧信号 4 态：未触发 / 酝酿中 / 临界 / 已触发</p>
+      <p class="text-[10px] mt-1" style="color: var(--color-default);">右侧状态 4 态：未触发 / 酝酿中 / 临界 / 已触发</p>
     </footer>
 
   </div>
@@ -273,6 +306,7 @@ def render_html(
     const DATA = {chart_json};
     const CHARTS = {{}};
     const RENDERED_SIGNAL_CHARTS = new Set();
+    const VOLUME_SIGNAL_VISIBLE_DAYS = 120;
 
     function renderSignalChart(idx) {{
       if (RENDERED_SIGNAL_CHARTS.has(idx)) return;
@@ -284,14 +318,15 @@ def render_html(
       switch (idxNum) {{
         case 0: renderVolumeChart('chart-0', klines); break;
         case 1: renderPriceWithLevels('chart-1', klines, 'no_new_low'); break;
-        case 2: renderCandlestick('chart-2', klines); break;
+        case 2: renderSupportChart('chart-2', klines, DATA.signal_data?.false_breakdown || {{}}); break;
         case 3: renderATR('chart-3', klines); break;
         case 4: renderVolumeProfile('chart-4', vp); break;
         case 5: renderIndexChart('chart-5', indexKlines); break;
         case 6: renderPriceWithMA('chart-6', klines); break;
-        case 7: renderCandlestickWithVolume('chart-7', klines); break;
-        case 8: renderMACD('chart-8', klines); break;
-        case 9: renderPriceWithLevels('chart-9', klines, 'higher_low'); break;
+        case 7: renderSupportChart('chart-7', klines, DATA.signal_data?.support_retest_hold || DATA.signal_data?.false_breakdown || {{}}); break;
+        case 8: renderCandlestickWithVolume('chart-8', klines); break;
+        case 9: renderMACD('chart-9', klines); break;
+        case 10: renderPriceWithLevels('chart-10', klines, 'higher_low'); break;
         default: return;
       }}
       RENDERED_SIGNAL_CHARTS.add(idx);
@@ -380,9 +415,106 @@ def render_html(
       return chart;
     }}
 
+    function createSupportChart(containerId) {{
+      const el = document.getElementById(containerId);
+      if (!el) return null;
+      el.style.height = '360px';
+      const w = el.clientWidth || el.parentElement.clientWidth || 600;
+      const chart = LightweightCharts.createChart(el, {{
+        width: w,
+        height: 360,
+        layout: {{ background: {{ color: '#ffffff' }}, textColor: '#6b7280' }},
+        grid: {{ vertLines: {{ color: '#f3f4f6' }}, horzLines: {{ color: '#f3f4f6' }} }},
+        crosshair: {{ mode: 0 }},
+        rightPriceScale: {{ borderColor: '#e5e7eb' }},
+        timeScale: {{ borderColor: '#e5e7eb', timeVisible: false, rightOffset: 5 }},
+        handleScroll: false,
+        handleScale: false,
+        localization: {{ locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' }},
+      }});
+      new ResizeObserver(() => chart.applyOptions({{ width: el.clientWidth }})).observe(el);
+      return chart;
+    }}
+
+    function weekStart(dateStr) {{
+      const d = new Date(dateStr + 'T00:00:00');
+      const day = d.getDay();
+      const diff = (day + 6) % 7;
+      d.setDate(d.getDate() - diff);
+      return d.toISOString().slice(0, 10);
+    }}
+
+    function aggregateWeeklyKlines(klines) {{
+      const rows = [];
+      let cur = null;
+      klines.forEach(k => {{
+        const key = weekStart(k.date);
+        if (!cur || cur.time !== key) {{
+          if (cur) rows.push(cur);
+          cur = {{
+            time: key,
+            start_date: key,
+            end_date: k.date,
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume || 0,
+          }};
+        }} else {{
+          cur.high = Math.max(cur.high, k.high);
+          cur.low = Math.min(cur.low, k.low);
+          cur.close = k.close;
+          cur.volume += k.volume || 0;
+          cur.end_date = k.date;
+        }}
+      }});
+      if (cur) rows.push(cur);
+      return rows;
+    }}
+
+    function aggregateMonthlyKlines(klines) {{
+      const rows = [];
+      let cur = null;
+      klines.forEach(k => {{
+        const key = k.date.slice(0, 7) + '-01';
+        if (!cur || cur.time !== key) {{
+          if (cur) rows.push(cur);
+          cur = {{
+            time: key,
+            start_date: key,
+            end_date: k.date,
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume || 0,
+          }};
+        }} else {{
+          cur.high = Math.max(cur.high, k.high);
+          cur.low = Math.min(cur.low, k.low);
+          cur.close = k.close;
+          cur.volume += k.volume || 0;
+          cur.end_date = k.date;
+        }}
+      }});
+      if (cur) rows.push(cur);
+      return rows;
+    }}
+
+    function weekTimeForDate(weeklyRows, dateStr) {{
+      const row = weeklyRows.find(w => w.start_date ? (w.start_date <= dateStr && dateStr <= w.end_date) : w.date === dateStr)
+        || weeklyRows.find(w => w.end_date ? w.end_date >= dateStr : w.date >= dateStr)
+        || weeklyRows[weeklyRows.length - 1];
+      return row ? (row.time || row.date || dateStr) : dateStr;
+    }}
+
     function renderVolumeChart(id, klines) {{
       const el = document.getElementById(id);
       if (!el) return;
+      const visibleKlines = klines.slice(-VOLUME_SIGNAL_VISIBLE_DAYS);
+      const visibleTimes = new Set(visibleKlines.map(k => k.date));
+      const visibleOffset = Math.max(0, klines.length - visibleKlines.length);
       el.style.height = '420px';
       const w = el.clientWidth || el.parentElement.clientWidth || 600;
       const chart = LightweightCharts.createChart(el, {{
@@ -402,10 +534,11 @@ def render_html(
         priceScaleId: 'right',
       }});
       candleSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.02, bottom: 0.52 }} }});
-      candleSeries.setData(klines.map(k => ({{ time: k.date, open: k.open, high: k.high, low: k.low, close: k.close }})));
+      candleSeries.setData(visibleKlines.map(k => ({{ time: k.date, open: k.open, high: k.high, low: k.low, close: k.close }})));
       // 成交量（占下方30%）— 下跌日红色，上涨日浅灰
-      const volumes = klines.map((k, i) => {{
-        const isDown = i > 0 && k.close < klines[i-1].close;
+      const volumes = visibleKlines.map((k, i) => {{
+        const prev = klines[visibleOffset + i - 1] || visibleKlines[i - 1];
+        const isDown = prev ? k.close < prev.close : false;
         return {{ time: k.date, value: k.volume, color: isDown ? '#16a34acc' : '#d1d5db' }};
       }});
       const volSeries = chart.addHistogramSeries({{
@@ -415,11 +548,12 @@ def render_html(
       volSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.52, bottom: 0 }} }});
       volSeries.setData(volumes);
       // MA20 成交量均线
-      const ma20Data = klines.map((k, i) => i >= 19 ? {{ time: k.date, value: klines.slice(i-19, i+1).reduce((s,x) => s+x.volume, 0) / 20 }} : null).filter(Boolean);
+      const ma20Data = klines.map((k, i) => i >= 19 ? {{ time: k.date, value: klines.slice(i-19, i+1).reduce((s,x) => s+x.volume, 0) / 20 }} : null).filter(p => p && visibleTimes.has(p.time));
       chart.addLineSeries({{ color: '#2563eb', lineWidth: 2, title: 'MA20', priceScaleId: 'vol' }}).setData(ma20Data);
       // MA60 成交量均线
-      const ma60Data = klines.map((k, i) => i >= 59 ? {{ time: k.date, value: klines.slice(i-59, i+1).reduce((s,x) => s+x.volume, 0) / 60 }} : null).filter(Boolean);
+      const ma60Data = klines.map((k, i) => i >= 59 ? {{ time: k.date, value: klines.slice(i-59, i+1).reduce((s,x) => s+x.volume, 0) / 60 }} : null).filter(p => p && visibleTimes.has(p.time));
       chart.addLineSeries({{ color: '#7c3aed', lineWidth: 2, title: 'MA60', priceScaleId: 'vol' }}).setData(ma60Data);
+      chart.timeScale().applyOptions({{ barSpacing: 5, minBarSpacing: 3, rightOffset: 4 }});
       chart.timeScale().fitContent();
       new ResizeObserver(() => chart.applyOptions({{ width: el.clientWidth }})).observe(el);
 
@@ -462,6 +596,172 @@ def render_html(
       const prevLow = Math.min(...lows.slice(-25, -5));
       series.createPriceLine({{ price: prevLow, color: '#ef4444', lineWidth: 1, lineStyle: 2, title: '前低' }});
       chart.timeScale().fitContent();
+    }}
+
+    function renderSupportChart(id, klines, signalData) {{
+      const el = document.getElementById(id);
+      const zones = (signalData.display_support_zones || signalData.support_zones || []).filter(z => z.low != null && z.high != null).slice(0, 2);
+      const supportFocus = signalData.support_focus || {{}};
+      const colors = ['#16a34a', '#f59e0b'];
+      if (!el) return;
+
+      const oldMethod = el.parentElement.querySelector('.support-method-panel');
+      if (oldMethod) oldMethod.remove();
+      if (id === 'chart-2') {{
+        const method = document.createElement('div');
+        method.className = 'support-method-panel';
+        method.style.cssText = 'border:1px solid #dbeafe;border-radius:8px;background:linear-gradient(180deg,#eff6ff 0%,#ffffff 100%);padding:10px 12px;margin:8px 0 10px;color:#334155;font-size:11px;line-height:1.55;';
+        const strongText = supportFocus.has_strong_support
+          ? '当前已识别到稳定性 ≥60% 的强支撑，若跌破后快速收回，才会在图上标记“破位/收回”。'
+          : '当前没有稳定性 ≥60% 的强支撑，所以不在图上标记“破位/收回”。';
+        method.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">'
+          + '<div style="font-weight:700;color:#1e3a8a;font-size:12px;">支撑位怎么判断</div>'
+          + '<div style="color:#64748b;">强支撑门槛：稳定性 ≥60%</div>'
+          + '</div>'
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;">'
+          + '<div><div style="font-weight:600;color:#0f172a;">1. 先找候选</div><div>前低、平台下沿、整数关口都算候选。候选越接近，说明市场可能在同一价格带反复关注。</div></div>'
+          + '<div><div style="font-weight:600;color:#0f172a;">2. 再合并区间</div><div>价格足够接近的候选会合成一个支撑区间；区间太宽会扣分，因为防线不够集中。</div></div>'
+          + '<div><div style="font-weight:600;color:#0f172a;">3. 最后看稳定性</div><div>稳定性看证据质量、类型多样性、重复确认和区间宽度；共振表示这些证据在同一区间重合的程度。</div></div>'
+          + '</div>'
+          + '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #dbeafe;color:#475569;">'
+          + strongText + ' 关键观察支撑可以用于跟踪和风控，但不等同于强支撑。'
+          + '</div>';
+        el.parentElement.insertBefore(method, el);
+      }}
+
+      const oldToolbar = el.parentElement.querySelector('.support-zone-toolbar');
+      if (oldToolbar) oldToolbar.remove();
+      const toolbar = document.createElement('div');
+      toolbar.className = 'support-zone-toolbar';
+      toolbar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;font-size:11px;color:#64748b;';
+      toolbar.innerHTML = '<span>结构周期</span><div style="display:inline-flex;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#f8fafc;">'
+        + '<button type="button" data-support-tf="day" style="padding:4px 10px;border:0;background:transparent;color:#64748b;font-size:11px;">日K</button>'
+        + '<button type="button" data-support-tf="week" style="padding:4px 10px;border:0;background:#111827;color:#fff;font-size:11px;">周K</button>'
+        + '<button type="button" data-support-tf="month" style="padding:4px 10px;border:0;background:transparent;color:#64748b;font-size:11px;">月K</button>'
+        + '</div>';
+      el.parentElement.insertBefore(toolbar, el);
+
+      function drawSupportFrame(tf) {{
+        if (CHARTS[id] && typeof CHARTS[id].remove === 'function') CHARTS[id].remove();
+        el.innerHTML = '';
+        const chart = createSupportChart(id);
+        if (!chart) return;
+        CHARTS[id] = chart;
+        const frameRows = tf === 'day' ? klines : tf === 'month' ? aggregateMonthlyKlines(klines) : aggregateWeeklyKlines(klines);
+        const sourceRows = frameRows.length >= 8 ? frameRows : klines;
+        const recent = sourceRows.slice(tf === 'day' ? -160 : tf === 'month' ? -72 : -120);
+        const data = recent.map(k => ({{ time: k.time || k.date, open: k.open, high: k.high, low: k.low, close: k.close }}));
+        const series = chart.addCandlestickSeries({{
+          upColor: 'rgba(220, 38, 38, 0)', downColor: '#16a34a',
+          borderVisible: true, borderUpColor: '#dc2626', borderDownColor: '#16a34a',
+          wickUpColor: '#dc2626', wickDownColor: '#16a34a',
+          priceLineVisible: true,
+          lastValueVisible: true,
+        }});
+        series.setData(data);
+
+        zones.forEach((z, i) => {{
+          const color = colors[i] || '#64748b';
+          series.createPriceLine({{ price: z.low, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' }});
+          series.createPriceLine({{ price: z.high, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' }});
+        }});
+
+        const ev = signalData.breakdown_event || {{}};
+        const retest = signalData.retest_event || {{}};
+        if (ev.break_date && ev.recover_date && typeof series.setMarkers === 'function') {{
+          const markers = [
+            {{ time: weekTimeForDate(sourceRows, ev.break_date), position: 'belowBar', color: '#ef4444', shape: 'arrowDown', text: '破位' }},
+            {{ time: weekTimeForDate(sourceRows, ev.recover_date), position: 'aboveBar', color: '#16a34a', shape: 'arrowUp', text: '收回' }},
+          ];
+          if (retest.date && !retest.failed) {{
+            markers.push({{ time: weekTimeForDate(sourceRows, retest.date), position: 'belowBar', color: '#2563eb', shape: 'circle', text: '回踩' }});
+          }}
+          series.setMarkers(markers);
+        }}
+        chart.timeScale().applyOptions({{ barSpacing: 8, minBarSpacing: 4, rightOffset: 6 }});
+        const from = Math.max(0, data.length - (tf === 'day' ? 160 : tf === 'month' ? 72 : 120));
+        chart.timeScale().setVisibleLogicalRange({{ from, to: data.length + 6 }});
+      }}
+
+      toolbar.querySelectorAll('button[data-support-tf]').forEach(btn => {{
+        btn.addEventListener('click', () => {{
+          const tf = btn.getAttribute('data-support-tf') || 'week';
+          toolbar.querySelectorAll('button[data-support-tf]').forEach(b => {{
+            b.style.background = 'transparent';
+            b.style.color = '#64748b';
+          }});
+          btn.style.background = '#111827';
+          btn.style.color = '#fff';
+          drawSupportFrame(tf);
+        }});
+      }});
+
+      drawSupportFrame('week');
+
+      const oldLegend = el.parentElement.querySelector('.support-zone-legend');
+      if (oldLegend) oldLegend.remove();
+      const legend = document.createElement('div');
+      legend.className = 'support-zone-legend';
+      legend.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:10px;font-size:11px;color:#475569;';
+      const tooltipStyleId = 'support-zone-tooltip-style';
+      if (!document.getElementById(tooltipStyleId)) {{
+        const style = document.createElement('style');
+        style.id = tooltipStyleId;
+        style.textContent = `
+          .support-tip {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; border: 1px solid #cbd5e1; color: #64748b; font-size: 11px; cursor: help; margin: -2px 2px; vertical-align: middle; }}
+          .support-tip-bubble {{ display: none; position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); width: 220px; padding: 8px 10px; border-radius: 8px; border: 1px solid #e5e7eb; background: #fff; color: #334155; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14); line-height: 1.5; z-index: 40; }}
+          .support-tip-bubble::after {{ content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: #fff; }}
+          .support-tip:hover .support-tip-bubble {{ display: block; }}
+        `;
+        document.head.appendChild(style);
+      }}
+      if (!zones.length) {{
+        legend.innerHTML = '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;background:#f9fafb;">支撑区间数据不足</div>';
+      }} else {{
+        legend.innerHTML = zones.map((z, i) => {{
+          const color = colors[i] || '#64748b';
+          const sources = (z.sources || []).join(' / ');
+          const strength = Math.round((z.strength || 0) * 100);
+          const confluence = z.confluence != null ? ' · 共振 ' + Math.round((z.confluence || 0) * 100) + '%' : '';
+          const width = z.width_pct ? ' · 宽度 ' + z.width_pct + '%' : '';
+          const strengthLabel = z.stability_label || (strength >= 60 ? '强' : strength >= 35 ? '中' : '弱');
+          const tip = '支撑稳定性综合前低、平台、整数位、候选重复度和区间宽度。弱：<35%，中：35%–59%，强：≥60%；关键观察支撑表示结构重要但稳定性待确认。';
+          const role = z.display_role || '关注支撑';
+          return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;background:#f9fafb;">'
+            + '<div style="display:flex;align-items:center;gap:6px;font-weight:600;color:#111827;">'
+            + '<span style="width:10px;height:10px;border-radius:999px;background:' + color + ';display:inline-block;"></span>'
+            + role + ' ' + Number(z.low).toFixed(2) + '–' + Number(z.high).toFixed(2)
+            + '</div>'
+            + '<div style="margin-top:4px;color:#64748b;">支撑稳定性 '
+            + '<span class="support-tip">?<span class="support-tip-bubble">' + tip + '</span></span> '
+            + strength + '%（' + strengthLabel + '）' + confluence + width + ' · ' + sources + '</div>'
+            + '</div>';
+        }}).join('');
+        if (supportFocus.has_strong_support === false) {{
+          legend.innerHTML += '<div style="border:1px dashed #cbd5e1;border-radius:8px;padding:8px 10px;background:#ffffff;color:#64748b;">'
+            + '<div style="font-weight:600;color:#334155;">下个强支撑：暂无</div>'
+            + '<div style="margin-top:4px;">当前价格下方未识别到稳定性 ≥60% 的强支撑位。</div>'
+            + '</div>';
+        }}
+      }}
+      legend.querySelectorAll('.support-tip').forEach(tip => {{
+        const bubble = tip.querySelector('.support-tip-bubble');
+        if (!bubble) return;
+        tip.setAttribute('tabindex', '0');
+        const show = () => {{ bubble.style.display = 'block'; }};
+        const hide = () => {{ bubble.style.display = ''; }};
+        const toggle = () => {{ bubble.style.display = bubble.style.display === 'block' ? '' : 'block'; }};
+        tip.addEventListener('mouseenter', show);
+        tip.addEventListener('mouseover', show);
+        tip.addEventListener('pointerenter', show);
+        tip.addEventListener('pointerover', show);
+        tip.addEventListener('mouseleave', hide);
+        tip.addEventListener('pointerleave', hide);
+        tip.addEventListener('click', toggle);
+        tip.addEventListener('focus', show);
+        tip.addEventListener('blur', hide);
+      }});
+      el.parentElement.insertBefore(legend, el.nextSibling);
     }}
 
     function renderATR(id, klines) {{
@@ -624,11 +924,25 @@ def _render_signal_detail(s: SignalResult) -> str:
             return f"{v*100:.0f}%"
 
         # 维度1 详情
-        single_detail = f"{last_down_date} 量={_fmt_vol(last_down_vol)}，MA20={_fmt_vol(vol20)}"
+        single_pct = single_ratio * 100
+        stage_pct = stage_ratio * 100
+        obvious_base = vol20 * 0.8
+        obvious_ratio = avg_down_vol / obvious_base if obvious_base else 0
+        obvious_pct = obvious_ratio * 100
+        single_detail = (
+            f"{last_down_date} 量={_fmt_vol(last_down_vol)}，MA20={_fmt_vol(vol20)}，"
+            f"实际/基准={single_pct:.0f}%"
+        )
         # 维度2 详情
-        stage_detail = f"近10日{down_days}天下跌均量={_fmt_vol(avg_down_vol)}，MA20={_fmt_vol(vol20)}"
+        stage_detail = (
+            f"近10日{down_days}天下跌均量={_fmt_vol(avg_down_vol)}，MA20={_fmt_vol(vol20)}，"
+            f"实际/基准={stage_pct:.0f}%"
+        )
         # 维度3 详情
-        obvious_detail = f"下跌日均量{_fmt_vol(avg_down_vol)} vs MA20×80%={_fmt_vol(vol20*0.8)}"
+        obvious_detail = (
+            f"下跌日均量={_fmt_vol(avg_down_vol)}，MA20×80%={_fmt_vol(obvious_base)}，"
+            f"实际/基准={obvious_pct:.0f}%"
+        )
         # 维度4 详情 — 带波段日期的tooltip气泡
         if trend_ratio is not None and avg_recent_wave is not None:
             td = trend_detail_data
@@ -656,19 +970,28 @@ def _render_signal_detail(s: SignalResult) -> str:
                 )
             else:
                 tooltip_html = f"近一轮={_fmt_vol(avg_recent_wave)}，上一轮={_fmt_vol(avg_prev_wave)}"
-            trend_cell = f'{trend_ratio*100:.0f}%'
+            trend_pct = trend_ratio * 100
             trend_dot = _dot(trend_ratio)
         else:
             tooltip_html = "波段数据不足"
-            trend_cell = "—"
+            trend_pct = None
             trend_dot = "⚪"
+        trend_detail = (
+            f'{tooltip_html}，实际/基准={trend_pct:.0f}%'
+            if trend_pct is not None else tooltip_html
+        )
         # 维度5 详情
         if div_detail:
-            div_info = f"价格新低{div_detail['recent_low_price']:.2f}({div_detail['recent_low_date']})量={_fmt_vol(div_detail['recent_low_vol'])}，前低{div_detail['prev_low_price']:.2f}({div_detail['prev_low_date']})量={_fmt_vol(div_detail['prev_low_vol'])}"
+            div_info = (
+                f"价格新低{div_detail['recent_low_price']:.2f}({div_detail['recent_low_date']})"
+                f"量={_fmt_vol(div_detail['recent_low_vol'])}，"
+                f"前低{div_detail['prev_low_price']:.2f}({div_detail['prev_low_date']})"
+                f"量={_fmt_vol(div_detail['prev_low_vol'])}，"
+                f"量价背离={'是' if score_div > 0 else '否'}"
+            )
         else:
-            div_info = "近期未创新低"
+            div_info = "近期未创新低，量价背离=否"
         div_dot = "🟢" if score_div > 0 else "🔴"
-        div_cell = "是" if score_div > 0 else "否"
 
         # 权重公式
         s_single = scores.get("single", 0)
@@ -724,13 +1047,12 @@ def _render_signal_detail(s: SignalResult) -> str:
 <div class="mt-4 text-xs">
   {formula_html}
   <div class="mt-4 overflow-x-auto rounded-xl" style="border: 1px solid var(--color-divider);">
-  <table class="w-full min-w-[760px] border-collapse" style="table-layout:fixed">
+  <table class="w-full min-w-[720px] border-collapse" style="table-layout:fixed">
     <colgroup>
       <col style="width:84px">
       <col style="width:56px">
       <col style="width:22%">
       <col>
-      <col style="width:64px">
       <col style="width:52px">
     </colgroup>
     <thead><tr class="text-gray-400 border-b border-gray-200" style="background: var(--color-surface-secondary);">
@@ -738,7 +1060,6 @@ def _render_signal_detail(s: SignalResult) -> str:
       <th class="text-center px-3 py-2.5 font-medium">权重</th>
       <th class="text-left px-3 py-2.5 font-medium">判断标准</th>
       <th class="text-left px-3 py-2.5 font-medium">数据明细</th>
-      <th class="text-center px-3 py-2.5 font-medium">比值</th>
       <th class="text-center px-3 py-2.5 font-medium">状态</th>
     </tr></thead>
     <tbody class="text-gray-600">
@@ -747,7 +1068,6 @@ def _render_signal_detail(s: SignalResult) -> str:
         <td class="text-center px-3 py-2.5 text-gray-400">10%</td>
         <td class="px-3 py-2.5 leading-snug">最近下跌日量 &lt; MA20</td>
         <td class="px-3 py-2.5 leading-snug">{single_detail}</td>
-        <td class="text-center px-3 py-2.5">{single_ratio*100:.0f}%</td>
         <td class="text-center px-3 py-2.5">{_dot(single_ratio)}</td>
       </tr>
       <tr class="border-b border-gray-50">
@@ -755,7 +1075,6 @@ def _render_signal_detail(s: SignalResult) -> str:
         <td class="text-center px-3 py-2.5 text-gray-400">15%</td>
         <td class="px-3 py-2.5 leading-snug">近期下跌日均量 &lt; MA20</td>
         <td class="px-3 py-2.5 leading-snug">{stage_detail}</td>
-        <td class="text-center px-3 py-2.5">{stage_ratio*100:.0f}%</td>
         <td class="text-center px-3 py-2.5">{_dot(stage_ratio)}</td>
       </tr>
       <tr class="border-b border-gray-50">
@@ -763,23 +1082,20 @@ def _render_signal_detail(s: SignalResult) -> str:
         <td class="text-center px-3 py-2.5 text-gray-400">20%</td>
         <td class="px-3 py-2.5 leading-snug">下跌日均量 &lt; MA20×80%</td>
         <td class="px-3 py-2.5 leading-snug">{obvious_detail}</td>
-        <td class="text-center px-3 py-2.5">{stage_ratio*100:.0f}%</td>
         <td class="text-center px-3 py-2.5">{_dot(stage_ratio, 0.8)}</td>
       </tr>
       <tr class="border-b border-gray-50">
         <td class="px-3 py-2.5 font-medium text-gray-700">趋势缩量</td>
         <td class="text-center px-3 py-2.5 text-gray-400">25%</td>
         <td class="px-3 py-2.5 leading-snug">近一轮下跌量 &lt; 上一轮</td>
-        <td class="px-3 py-2.5 leading-snug">{tooltip_html}</td>
-        <td class="text-center px-3 py-2.5">{trend_cell}</td>
+        <td class="px-3 py-2.5 leading-snug">{trend_detail}</td>
         <td class="text-center px-3 py-2.5">{trend_dot}</td>
       </tr>
       <tr>
         <td class="px-3 py-2.5 font-medium text-gray-700">量价背离</td>
         <td class="text-center px-3 py-2.5 text-gray-400">30%</td>
-        <td class="px-3 py-2.5 leading-snug">价创新低但量不创新低</td>
+        <td class="px-3 py-2.5 leading-snug">价创新低且量能萎缩</td>
         <td class="px-3 py-2.5 leading-snug">{div_info}</td>
-        <td class="text-center px-3 py-2.5">{div_cell}</td>
         <td class="text-center px-3 py-2.5">{div_dot}</td>
       </tr>
     </tbody>

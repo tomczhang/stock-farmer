@@ -10,10 +10,16 @@ from analyzer.signals import (
     compute_all_signals,
     _calc_vol_shrink,
     _calc_above_ma,
+    _calc_false_breakdown,
+    _calc_support_retest_hold,
     _calc_macd_cross,
     _calc_higher_low,
+    _select_active_support,
+    _select_display_support_zones,
+    _separate_support_zones,
     _to_light,
 )
+import analyzer.signals as signals_module
 from analyzer.phase import determine_phase, compute_overall_strength
 from analyzer.renderer import render_html
 
@@ -87,8 +93,138 @@ class TestSignals:
     def test_compute_all_signals(self):
         df = _make_df(60)
         signals = compute_all_signals(df)
-        assert len(signals) == 10
+        assert len(signals) == 11
         assert all(isinstance(s, SignalResult) for s in signals)
+
+    def test_support_zones_do_not_overlap_after_separation(self):
+        zones = [
+            {"low": 432.87, "high": 465.33, "center": 449.68, "strength": 1.0},
+            {"low": 414.67, "high": 438.61, "center": 423.37, "strength": 0.9},
+        ]
+        separated = _separate_support_zones(zones, current=459.0, atr=10.0)
+        assert len(separated) == 2
+        assert separated[0]["low"] == 432.87
+        assert separated[1]["high"] < separated[0]["low"]
+
+    def test_false_breakdown_ignores_weak_support(self, monkeypatch):
+        df = _make_df(40, trend="flat")
+        df.loc[:, "close"] = 110.0
+        df.loc[:, "high"] = 112.0
+        df.loc[:, "low"] = 108.0
+        df.loc[:, "open"] = 109.0
+        df.loc[len(df) - 3, "low"] = 99.0
+        df.loc[len(df) - 2, "close"] = 106.0
+        weak_zone = {
+            "low": 100.0,
+            "high": 105.0,
+            "center": 102.5,
+            "strength": 0.26,
+            "sources": ["近3个月前低"],
+        }
+
+        monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [weak_zone])
+        result = _calc_false_breakdown(df)
+
+        assert result.confidence == 0.0
+        assert result.light == "red"
+        assert result.data["breakdown_event"] == {}
+        assert "未识别到稳定性 ≥60% 的强支撑" in result.description
+
+    def test_false_breakdown_ignores_medium_support(self, monkeypatch):
+        df = _make_df(40, trend="flat")
+        df.loc[:, "close"] = 110.0
+        df.loc[:, "high"] = 112.0
+        df.loc[:, "low"] = 108.0
+        df.loc[:, "open"] = 109.0
+        df.loc[:, "volume"] = 5_000_000
+        df.loc[len(df) - 4, "low"] = 99.0
+        df.loc[len(df) - 3, "close"] = 108.0
+        medium_zone = {
+            "low": 100.0,
+            "high": 105.0,
+            "center": 102.5,
+            "strength": 0.55,
+            "sources": ["近3个月前低", "整数关口"],
+            "kinds": ["前低", "整数关口"],
+            "is_major_support": True,
+        }
+
+        monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [medium_zone])
+        result = _calc_false_breakdown(df)
+
+        assert result.confidence == 0.0
+        assert result.data["active_support"] == {}
+        assert result.data["breakdown_event"] == {}
+        assert "未识别到稳定性 ≥60% 的强支撑" in result.description
+
+    def test_active_support_prefers_nearest_actionable_zone(self):
+        zones = [
+            {"low": 453.0, "high": 456.0, "center": 454.5, "strength": 0.26},
+            {"low": 418.0, "high": 422.0, "center": 420.0, "strength": 0.51},
+        ]
+
+        active = _select_active_support(zones, current=459.0)
+
+        assert active is not None
+        assert active["center"] == 420.0
+
+    def test_display_support_labels_major_medium_zone_as_watch_support(self):
+        zones = [
+            {
+                "low": 453.0,
+                "high": 456.0,
+                "center": 454.5,
+                "strength": 0.26,
+                "is_major_support": False,
+            },
+            {
+                "low": 418.0,
+                "high": 422.0,
+                "center": 420.0,
+                "strength": 0.51,
+                "is_major_support": True,
+            },
+        ]
+
+        display, focus = _select_display_support_zones(zones, current=459.0)
+
+        assert display[1]["display_role"] == "关键观察支撑，稳定性待确认"
+        assert focus["has_strong_support"] is False
+        assert focus["has_main_support"] is True
+
+    def test_support_retest_hold_after_false_breakdown(self, monkeypatch):
+        df = _make_df(40, trend="flat")
+        df.loc[:, "close"] = 110.0
+        df.loc[:, "high"] = 112.0
+        df.loc[:, "low"] = 108.0
+        df.loc[:, "open"] = 109.0
+        df.loc[:, "volume"] = 5_000_000
+
+        n = len(df)
+        df.loc[n - 5, ["open", "high", "low", "close"]] = [104.0, 106.0, 99.0, 102.0]
+        df.loc[n - 4, ["open", "high", "low", "close"]] = [103.0, 108.0, 103.0, 107.0]
+        df.loc[n - 3, ["open", "high", "low", "close"]] = [109.0, 112.0, 107.0, 110.0]
+        df.loc[n - 2, ["open", "high", "low", "close"]] = [106.0, 109.0, 104.0, 108.0]
+        df.loc[n - 1, ["open", "high", "low", "close"]] = [110.0, 113.0, 109.0, 111.0]
+
+        support_zone = {
+            "low": 100.0,
+            "high": 105.0,
+            "center": 102.5,
+            "strength": 0.72,
+            "sources": ["近3个月前低"],
+            "kinds": ["前低"],
+        }
+
+        monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [support_zone])
+        false_signal = _calc_false_breakdown(df)
+        result = _calc_support_retest_hold(df, false_breakdown=false_signal)
+
+        assert false_signal.data["breakdown_event"]["recover_date"] == df.loc[n - 4, "date"]
+        assert result.id == "support_retest_hold"
+        assert result.light == "green"
+        assert result.data["retest_event"]["date"] == df.loc[n - 2, "date"]
+        assert "回踩支撑区间" in result.description
 
 
 class TestPhase:
@@ -158,4 +294,4 @@ class TestRenderer:
         assert "AAPL" in html
         assert "信号0" in html
         assert "tailwindcss" in html
-        assert "bg-[#0f1117]" in html
+        assert "report-shell" in html
