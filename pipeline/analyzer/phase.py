@@ -81,6 +81,8 @@ def _compute_trigger(signals: list[SignalResult], phase: str) -> str:
         return "MACD 金叉确认则趋势转强"
     if best.id == "volume_breakout":
         return "出现放量阳线（成交量 > 20日均量）则确认"
+    if best.id == "support_retest_hold":
+        return "回踩支撑位不破则确认右侧站稳"
     if best.id == "vol_shrink":
         return "成交量继续萎缩则底部信号加强"
 

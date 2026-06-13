@@ -14,15 +14,91 @@ from analyzer.narrative import generate_narrative
 from analyzer.renderer import render_html
 
 
+def _merge_quote_into_daily_klines(df, quote):
+    """用实时 quote 补齐/更新当日日 K，避免收盘后 K 线源晚一天。"""
+    if quote is None or quote.price is None or len(df) == 0:
+        return df
+    if quote.open is None or quote.high is None or quote.low is None:
+        return df
+
+    if quote.timestamp:
+        quote_date = str(quote.timestamp).split()[0].replace("/", "-")
+    else:
+        quote_date = datetime.now().strftime("%Y-%m-%d")
+
+    row = {
+        "date": quote_date,
+        "open": float(quote.open),
+        "close": float(quote.price),
+        "high": float(quote.high),
+        "low": float(quote.low),
+        "volume": int(quote.volume or 0),
+        "amount": float(quote.amount) if quote.amount is not None else None,
+    }
+
+    last_date = str(df["date"].iloc[-1])
+    if quote_date == last_date:
+        for key, value in row.items():
+            df.loc[df.index[-1], key] = value
+        return df
+    if quote_date > last_date:
+        df.loc[len(df)] = row
+        return df.reset_index(drop=True)
+    return df
+
+
+def _profile_records(profile) -> list[dict]:
+    return [
+        {"price_level": b.price_level, "volume": b.volume, "pct": b.pct}
+        for b in profile
+    ] if profile else []
+
+
+def _build_volume_profile_windows(ticker: str, days_list=(3, 20, 60), num_bins: int = 30):
+    """一次拉取最长分钟 K，再按交易日切分成多个成交密集区窗口。"""
+    from data import get_klines
+    from data.indicators import build_volume_profile
+
+    bars_per_day = 78
+    max_days = max(days_list)
+    df = get_klines(ticker, period="5m", count=max_days * bars_per_day)
+    if len(df) == 0 or "date" not in df.columns:
+        return {}, {}
+
+    date_labels = df["date"].astype(str).str.split().str[0]
+    unique_dates = list(dict.fromkeys(date_labels.tolist()))
+    profiles = {}
+    meta = {}
+    for days in days_list:
+        selected_dates = unique_dates[-days:]
+        if not selected_dates:
+            continue
+        mask = date_labels.isin(selected_dates)
+        window_df = df.loc[mask].copy()
+        profile = build_volume_profile(window_df, num_bins=num_bins)
+        if not profile:
+            continue
+        key = f"{days}d"
+        profiles[key] = profile
+        meta[key] = {
+            "requested_days": days,
+            "actual_days": len(selected_dates),
+            "rows": int(len(window_df)),
+            "start_date": selected_dates[0],
+            "end_date": selected_dates[-1],
+        }
+    return profiles, meta
+
+
 def analyze(ticker: str, output_dir: str | None = None) -> str:
     """运行完整分析流程，返回生成的 HTML 文件路径。"""
-    from data import get_klines, get_quotes, get_volume_profile
+    from data import get_klines, get_quotes
 
     print(f"正在分析 {ticker} ...")
 
     # 获取数据
     print("  拉取日K线...")
-    df = get_klines(ticker, period="1d", count=120)
+    df = get_klines(ticker, period="1d", count=1260)
 
     print("  拉取实时行情...")
     try:
@@ -31,11 +107,14 @@ def analyze(ticker: str, output_dir: str | None = None) -> str:
     except Exception:
         quote = None
 
+    df = _merge_quote_into_daily_klines(df, quote)
+
     print("  构建 Volume Profile...")
     try:
-        vp = get_volume_profile(ticker, days=3, num_bins=30)
+        volume_profiles, volume_profile_meta = _build_volume_profile_windows(ticker)
     except Exception:
-        vp = []
+        volume_profiles, volume_profile_meta = {}, {}
+    vp = volume_profiles.get("20d") or volume_profiles.get("3d") or []
 
     print("  拉取指数数据...")
     try:
@@ -60,7 +139,13 @@ def analyze(ticker: str, output_dir: str | None = None) -> str:
     chart_data = {
         "klines": df.to_dict("records") if len(df) > 0 else [],
         "index_klines": index_df[["date", "close"]].to_dict("records") if index_df is not None and len(index_df) > 0 else [],
-        "volume_profile": [{"price_level": b.price_level, "volume": b.volume, "pct": b.pct} for b in vp] if vp else [],
+        "volume_profile": _profile_records(vp),
+        "volume_profiles": {
+            key: _profile_records(profile)
+            for key, profile in volume_profiles.items()
+            if profile
+        },
+        "volume_profile_meta": volume_profile_meta,
     }
 
     # 渲染 HTML

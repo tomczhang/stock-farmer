@@ -352,23 +352,42 @@ def _add_swing_low_candidates(
         idxs.add(start + int(np.argmin(lows[start:])))
 
     for i in sorted(idxs):
-        future_high = float(np.max(highs[i:min(n, i + 11)]))
-        rebound_pct = max(0.0, (future_high - lows[i]) / lows[i]) if lows[i] else 0.0
+        low = float(lows[i])
+        future_highs = highs[i:min(n, i + 11)]
+        immediate_highs = highs[i:min(n, i + 4)]
+        future_rebounds = (
+            np.maximum(0.0, (future_highs - low) / low)
+            if low and len(future_highs) else np.array([0.0])
+        )
+        immediate_rebound_pct = (
+            max(0.0, (float(np.max(immediate_highs)) - low) / low)
+            if low and len(immediate_highs) else 0.0
+        )
+        best_rebound_pct = float(np.max(future_rebounds)) if len(future_rebounds) else 0.0
+        best_rebound_days = int(np.argmax(future_rebounds)) if len(future_rebounds) else 0
         vol_window = volumes[max(0, i - 19):i + 1]
         vol_base = float(np.mean(vol_window)) if len(vol_window) else 1.0
         volume_ratio = volumes[i] / vol_base if vol_base else 1.0
         recency = math.exp(-(n - 1 - i) / 120)
+        immediate_rebound_score = _clamp(immediate_rebound_pct / 0.08)
+        speed_score = _clamp(best_rebound_pct / 0.08) * math.exp(-best_rebound_days / 3)
+        volume_score = _clamp((volume_ratio - 0.8) / 1.2)
         score = (
-            _clamp(rebound_pct / 0.12) * 0.45
-            + _clamp(volume_ratio / 2.0) * 0.25
-            + _clamp(recency) * 0.30
+            immediate_rebound_score * 0.35
+            + speed_score * 0.20
+            + volume_score * 0.20
+            + _clamp(recency) * 0.25
         )
         candidates.append({
-            "price": float(lows[i]),
+            "price": low,
             "score": float(score),
             "source": source,
             "date": str(dates[i]),
             "kind": "前低",
+            "immediate_rebound_pct": float(immediate_rebound_pct),
+            "best_rebound_pct": float(best_rebound_pct),
+            "best_rebound_days": best_rebound_days,
+            "volume_ratio": float(volume_ratio),
         })
 
 

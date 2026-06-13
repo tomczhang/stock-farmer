@@ -43,9 +43,9 @@ def resolve_right_state(confidence: float, thresholds: tuple[float, float]) -> s
 
 def build_signal_report(ticker: str) -> dict[str, Any]:
     """Run the Python analysis chain and return a JSON-serializable report."""
-    from pipeline.data import get_klines, get_quotes, get_volume_profile
+    from pipeline.data import get_klines, get_quotes
 
-    df = get_klines(ticker, period="1d", count=120)
+    df = get_klines(ticker, period="1d", count=1260)
 
     try:
         quotes = get_quotes([ticker])
@@ -54,9 +54,10 @@ def build_signal_report(ticker: str) -> dict[str, Any]:
         quote = None
 
     try:
-        volume_profile = get_volume_profile(ticker, days=3, num_bins=30)
+        volume_profiles, volume_profile_meta = _build_volume_profile_windows(ticker)
     except Exception:
-        volume_profile = []
+        volume_profiles, volume_profile_meta = {}, {}
+    volume_profile = volume_profiles.get("20d") or volume_profiles.get("3d") or []
 
     try:
         index_df = get_klines("SPY", period="1d", count=30)
@@ -80,12 +81,13 @@ def build_signal_report(ticker: str) -> dict[str, Any]:
         "index_klines": _records(index_df[["date", "close"]])
         if index_df is not None and len(index_df) > 0
         else [],
-        "volume_profile": [
-            {"price_level": b.price_level, "volume": b.volume, "pct": b.pct}
-            for b in volume_profile
-        ]
-        if volume_profile
-        else [],
+        "volume_profile": _volume_profile_records(volume_profile),
+        "volume_profiles": {
+            key: _volume_profile_records(profile)
+            for key, profile in volume_profiles.items()
+            if profile
+        },
+        "volume_profile_meta": volume_profile_meta,
     }
 
     return make_report_payload(
@@ -178,8 +180,23 @@ def build_demo_signal_report(ticker: str = "DEMO") -> dict[str, Any]:
             light="green",
             thresholds=(0.35, 0.70),
             weight=2,
-            description="收盘站上 MA20 且回踩未破，是当前最强右侧确认。",
+            description="收盘站上 MA20，短期均线重新转强。",
             data={"ma20": 97.4},
+        ),
+        SignalResult(
+            id="support_retest_hold",
+            name="回踩不破",
+            category="right",
+            confidence=0.76,
+            light="green",
+            thresholds=(0.35, 0.70),
+            weight=2,
+            description="收回支撑后再次回踩，低点与收盘均守住支撑区间。",
+            data={
+                "active_support": {"low": 94.2, "high": 96.8, "strength": 0.72},
+                "breakdown_event": {"break_date": "2026-04-08", "recover_date": "2026-04-10"},
+                "retest_event": {"date": "2026-04-15", "low": 95.1, "close": 97.3},
+            },
         ),
         SignalResult(
             id="volume_breakout",
@@ -309,6 +326,52 @@ def _signal_payload(signal: SignalResult) -> dict[str, Any]:
 def _records(df: pd.DataFrame) -> list[dict[str, Any]]:
     records = df.to_dict("records")
     return [_json_safe_record(record) for record in records]
+
+
+def _volume_profile_records(profile: list) -> list[dict[str, Any]]:
+    return [
+        {"price_level": b.price_level, "volume": b.volume, "pct": b.pct}
+        for b in profile
+    ] if profile else []
+
+
+def _build_volume_profile_windows(
+    ticker: str,
+    days_list: tuple[int, ...] = (3, 20, 60),
+    num_bins: int = 30,
+) -> tuple[dict[str, list], dict[str, dict[str, Any]]]:
+    """一次拉取最长分钟 K，再按交易日切分成多个成交密集区窗口。"""
+    from pipeline.data import get_klines
+    from pipeline.data.indicators import build_volume_profile
+
+    bars_per_day = 78
+    max_days = max(days_list)
+    df = get_klines(ticker, period="5m", count=max_days * bars_per_day)
+    if len(df) == 0 or "date" not in df.columns:
+        return {}, {}
+
+    date_labels = df["date"].astype(str).str.split().str[0]
+    unique_dates = list(dict.fromkeys(date_labels.tolist()))
+    profiles: dict[str, list] = {}
+    meta: dict[str, dict[str, Any]] = {}
+    for days in days_list:
+        selected_dates = unique_dates[-days:]
+        if not selected_dates:
+            continue
+        window_df = df.loc[date_labels.isin(selected_dates)].copy()
+        profile = build_volume_profile(window_df, num_bins=num_bins)
+        if not profile:
+            continue
+        key = f"{days}d"
+        profiles[key] = profile
+        meta[key] = {
+            "requested_days": days,
+            "actual_days": len(selected_dates),
+            "rows": int(len(window_df)),
+            "start_date": selected_dates[0],
+            "end_date": selected_dates[-1],
+        }
+    return profiles, meta
 
 
 def _json_safe_record(record: dict[str, Any]) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from analyzer.signals import (
     _calc_support_retest_hold,
     _calc_macd_cross,
     _calc_higher_low,
+    _add_swing_low_candidates,
     _select_active_support,
     _select_display_support_zones,
     _separate_support_zones,
@@ -95,6 +96,48 @@ class TestSignals:
         signals = compute_all_signals(df)
         assert len(signals) == 11
         assert all(isinstance(s, SignalResult) for s in signals)
+
+    def test_swing_low_quality_discounts_delayed_low_volume_rebound(self):
+        df = _make_df(25, trend="flat")
+        df.loc[:, "open"] = 100.0
+        df.loc[:, "high"] = 101.0
+        df.loc[:, "low"] = 99.0
+        df.loc[:, "close"] = 100.0
+        df.loc[:, "volume"] = 1_000_000
+
+        low_idx = 10
+        df.loc[low_idx, ["open", "high", "low", "close", "volume"]] = [92.0, 92.5, 90.0, 91.0, 1_000_000]
+        for j in range(low_idx + 1, low_idx + 6):
+            df.loc[j, ["open", "high", "low", "close"]] = [91.0, 93.0, 90.5, 92.0]
+        df.loc[low_idx + 6, "high"] = 106.0
+
+        candidates: list[dict] = []
+        _add_swing_low_candidates(candidates, df, 25, "测试前低")
+        low_candidate = next(c for c in candidates if abs(float(c["price"]) - 90.0) < 1e-9)
+
+        assert low_candidate["best_rebound_days"] == 6
+        assert low_candidate["score"] < 0.45
+
+    def test_swing_low_quality_rewards_fast_volume_rebound(self):
+        df = _make_df(25, trend="flat")
+        df.loc[:, "open"] = 100.0
+        df.loc[:, "high"] = 101.0
+        df.loc[:, "low"] = 99.0
+        df.loc[:, "close"] = 100.0
+        df.loc[:, "volume"] = 1_000_000
+
+        low_idx = 10
+        df.loc[low_idx, ["open", "high", "low", "close", "volume"]] = [92.0, 93.0, 90.0, 91.0, 2_500_000]
+        df.loc[low_idx + 1, "high"] = 100.0
+        for j in range(low_idx + 2, low_idx + 11):
+            df.loc[j, ["open", "high", "low", "close"]] = [93.0, 94.0, 91.0, 93.5]
+
+        candidates: list[dict] = []
+        _add_swing_low_candidates(candidates, df, 25, "测试前低")
+        low_candidate = next(c for c in candidates if abs(float(c["price"]) - 90.0) < 1e-9)
+
+        assert low_candidate["best_rebound_days"] == 1
+        assert low_candidate["score"] > 0.65
 
     def test_support_zones_do_not_overlap_after_separation(self):
         zones = [
