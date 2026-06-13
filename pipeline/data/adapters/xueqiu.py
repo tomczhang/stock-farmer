@@ -183,6 +183,8 @@ def fetch_quotes(
             ))
         except Exception:
             out.append(Quote(ticker=ticker))
+    if out and all(q.price is None and q.name is None for q in out):
+        raise AdapterError("xueqiu", "no quote data")
     return out
 
 

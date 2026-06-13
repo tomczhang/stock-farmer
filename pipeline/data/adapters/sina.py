@@ -81,6 +81,21 @@ def fetch_quotes(
                 prev_close=_f(fields[26]) if len(fields) > 26 else None,
                 volume=_i(fields[10]) if len(fields) > 10 else None,
             ))
+        elif mkt == "HK" and len(fields) >= 19:
+            out.append(Quote(
+                ticker=ticker,
+                name=fields[1] or fields[0],
+                price=_f(fields[6]),
+                open=_f(fields[2]),
+                high=_f(fields[4]),
+                low=_f(fields[5]),
+                prev_close=_f(fields[3]),
+                volume=_i(fields[12]),
+                amount=_f(fields[11]),
+                change_pct=_f(fields[8]),
+                change_amount=_f(fields[7]),
+                timestamp=f"{fields[17]} {fields[18]}",
+            ))
         else:
             out.append(Quote(
                 ticker=ticker,

@@ -123,11 +123,23 @@ def _fetch_via_yfinance(symbol: str, interval: str, count: int, period: str) -> 
     import yfinance as yf
 
     range_ = _estimate_range(period, count)
-    tick = yf.Ticker(symbol)
-    hist = tick.history(period=range_, interval=interval)
+    hist = yf.download(
+        symbol,
+        period=range_,
+        interval=interval,
+        progress=False,
+        auto_adjust=False,
+        threads=False,
+    )
 
     if hist.empty:
         raise RuntimeError(f"yfinance returned empty for {symbol}")
+
+    if isinstance(hist.columns, pd.MultiIndex):
+        if symbol in hist.columns.get_level_values(-1):
+            hist = hist.xs(symbol, axis=1, level=-1)
+        else:
+            hist.columns = hist.columns.get_level_values(0)
 
     is_intraday = period in ("5m", "15m", "30m", "60m")
     fmt = "%Y-%m-%d %H:%M" if is_intraday else "%Y-%m-%d"

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from data.adapters import eastmoney, sina, yahoo
+from data.adapters import eastmoney, sina, xueqiu, yahoo
 from data.adapters.xueqiu import fetch_pe_ttm
 from data.types import AdapterError
 
@@ -80,7 +80,10 @@ class TestYahooKlines:
                 }]},
             }]},
         }
-        with patch("data.adapters.yahoo.requests.get", return_value=mock_resp):
+        with (
+            patch("data.adapters.yahoo._fetch_via_yfinance", side_effect=RuntimeError("skip yfinance")),
+            patch("data.adapters.yahoo.requests.get", return_value=mock_resp),
+        ):
             df = yahoo.fetch_klines("AAPL", period="1d", count=10)
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 2
@@ -103,10 +106,34 @@ class TestSinaQuotes:
         assert quotes[0].name == "苹果"
         assert quotes[0].price == 312.06
 
+    def test_fetch_quotes_parses_hk(self):
+        hq_text = (
+            'var hq_str_rt_hk00700="TENCENT,腾讯控股,462.600,466.400,468.600,454.800,459.000,'
+            '-7.400,-1.587,458.800,459.000,13328580540.671,29053909,16.699,0.000,'
+            '675.134,420.400,2026/06/04,16:08:18,100|0,N|Y|Y,459.000|436.200|481.800,'
+            '0|||0.000|0.000|0.000, |0,Y";'
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = hq_text
+        with patch("data.adapters.sina.requests.get", return_value=mock_resp):
+            quotes = sina.fetch_quotes(["0700.HK"])
+        assert len(quotes) == 1
+        assert quotes[0].name == "腾讯控股"
+        assert quotes[0].price == 459.0
+        assert quotes[0].prev_close == 466.4
+        assert quotes[0].change_pct == -1.587
+        assert quotes[0].change_amount == -7.4
+
 
 # ---------- xueqiu ----------
 
 class TestXueqiuPE:
+    def test_fetch_quotes_raises_when_all_quotes_empty(self):
+        with patch("data.adapters.xueqiu._request", side_effect=RuntimeError("blocked")):
+            with pytest.raises(xueqiu.AdapterError):
+                xueqiu.fetch_quotes(["0700.HK"])
+
     def test_fetch_pe_ttm_returns_value(self):
         mock_session = MagicMock()
         mock_resp = MagicMock()

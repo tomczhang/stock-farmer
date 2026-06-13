@@ -209,6 +209,8 @@ def fetch_klines(
         })
 
     df = pd.DataFrame(rows)
+    if not df.empty and "date" in df.columns:
+        df = df.sort_values("date").reset_index(drop=True)
     if count and len(df) > count:
         df = df.tail(count).reset_index(drop=True)
     return df
