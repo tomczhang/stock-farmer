@@ -314,13 +314,15 @@ def render_html(
       const klines = DATA.klines;
       const indexKlines = DATA.index_klines || [];
       const vp = DATA.volume_profile || [];
+      const volumeProfiles = DATA.volume_profiles || {{}};
+      const volumeProfileMeta = DATA.volume_profile_meta || {{}};
       const idxNum = Number(idx);
       switch (idxNum) {{
         case 0: renderVolumeChart('chart-0', klines); break;
         case 1: renderPriceWithLevels('chart-1', klines, 'no_new_low'); break;
         case 2: renderSupportChart('chart-2', klines, DATA.signal_data?.false_breakdown || {{}}); break;
         case 3: renderATR('chart-3', klines); break;
-        case 4: renderVolumeProfile('chart-4', vp); break;
+        case 4: renderVolumeProfile('chart-4', klines, vp, DATA.signal_data?.chip_concentration || {{}}, volumeProfiles, volumeProfileMeta); break;
         case 5: renderIndexChart('chart-5', indexKlines); break;
         case 6: renderPriceWithMA('chart-6', klines); break;
         case 7: renderSupportChart('chart-7', klines, DATA.signal_data?.support_retest_hold || DATA.signal_data?.false_breakdown || {{}}); break;
@@ -392,6 +394,113 @@ def render_html(
           buttons.forEach(b => b.removeAttribute('data-on'));
           btn.setAttribute('data-on', '1');
         }});
+      }});
+    }}
+
+    function attachSupportHelpModal() {{
+      const content = {{
+        confluence: {{
+          title: '共振怎么看',
+          subtitle: '判断不同依据是否集中指向同一个价格带。',
+          body: [
+            ['参与依据', '前低、平台下沿、整数关口。每一类只取该区间内最高质量候选，避免同类候选重复堆分。'],
+            ['当前权重', '前低 40%，平台下沿 35%，整数关口 15%；再乘区间宽度惩罚。'],
+            ['读数口径', '&lt;25 弱共振；25–39 有共振但不够集中；40–54 明确共振、值得看；55–69 高共振；≥70 很强共振。'],
+            ['使用提醒', '共振不是上涨概率，也不等于强支撑。它只说明市场关注点是否集中。']
+          ]
+        }},
+        stability: {{
+          title: '稳定性怎么算',
+          subtitle: '判断这个区间能不能从观察位升级成强支撑。',
+          body: [
+            ['候选质量', '前低看低点后 1–3 日是否快速反弹、10 日内最佳反弹来得是否够快、低点当天是否放量、时间是否够近。'],
+            ['平台质量', '看近 20/30/45/60 日箱体。平台下沿取低点 20% 分位，平台上沿取收盘价 80% 分位；箱体宽度 = (上沿 - 下沿) / 下沿。超过约 12% 不算有效平台；约 4% 或更窄接近满分，同时看持续时间和触碰次数。'],
+            ['结构加分', '不同类型证据越多越好；同一类被多个窗口重复确认也会加分。'],
+            ['宽度惩罚', '支撑区间越宽，说明防线越散，稳定性会打折。'],
+            ['读数口径', '&lt;35 弱；35–49 中等偏弱；50–59 中等偏强、待确认；≥60 强支撑；≥75 高质量强支撑。']
+          ]
+        }},
+        volumeBasis: {{
+          title: '缩量怎么看',
+          subtitle: '判断下跌过程中抛压是否在边际减轻。',
+          body: [
+            ['先定样本', '只看下跌日，口径是收盘价低于前一日收盘价；这样避免把上涨日的成交量混进抛压判断。'],
+            ['单日缩量', '最近一个下跌日成交量低于 MA20，说明当天抛压没有放大。'],
+            ['阶段缩量', '近 10 日内下跌日均量低于 MA20，说明这一小段下跌不是持续放量砸盘。'],
+            ['明显缩量', '下跌日均量低于 MA20 × 80%，属于更明确的缩量信号。'],
+            ['趋势缩量', '近一轮下跌波段的日均量低于上一轮下跌波段，说明同样下跌时卖压变轻。']
+          ]
+        }},
+        volumeScore: {{
+          title: '缩量强弱怎么算',
+          subtitle: '综合分越高，代表下跌时抛压减轻的证据越多。',
+          body: [
+            ['权重结构', '量价背离 30%，趋势缩量 25%，明显缩量 20%，阶段缩量 15%，单日缩量 10%。'],
+            ['量价背离', '价格创出近期新低，但成交量低于前低，是最强证据，因为它同时验证价格和成交量。'],
+            ['趋势优先', '趋势缩量权重高于单日缩量，因为波段级别的量能变化比单日噪音更可靠。'],
+            ['读数口径', '低分表示缩量证据不足；中等分表示抛压有减轻迹象；高分表示多项缩量条件同时成立。'],
+            ['使用提醒', '缩量下跌不是买入信号。它只说明卖压可能变轻，仍要结合支撑位、假破位收回或右侧放量信号。']
+          ]
+        }},
+        chipProfile: {{
+          title: '筹码分布怎么看',
+          subtitle: '把最近成交量按成交价格分桶，观察成交密集区在哪里。',
+          body: [
+            ['图上位置', '左侧是股票 K 线，右侧横条按价格高低排列，表示各价格附近的成交量分布。横条越长，说明最近越多成交发生在这个价格附近。'],
+            ['数据口径', '可切换 3 日、20 日、60 日窗口。每个窗口都使用 5 分钟 K 线，把每根 5 分钟 K 的收盘价和成交量归入价格桶；如果数据源不足，会标注实际可用天数。'],
+            ['颜色含义', '高亮的横条是成交量最大的前 3 个价格桶，也就是当前“筹码集中”计算最关注的区域。'],
+            ['使用方式', '如果成交密集区靠近现价，说明近期换手集中在这里；如果离现价很远，对当前支撑或压力的解释力会下降。']
+          ]
+        }},
+        chipScore: {{
+          title: '筹码集中度怎么算',
+          subtitle: '确认度来自前 3 个成交密集价格桶占总成交量的比例。',
+          body: [
+            ['核心公式', '前3价位桶占比 = 成交量最大的 3 个价格桶成交量之和 / 全部价格桶成交量。'],
+            ['确认度', '筹码集中确认度 = 前3价位桶占比 / 60%，上限为 100%。例如前3桶占 21.6%，确认度就是 36%。'],
+            ['为什么除以 60%', '60% 被当作“高度集中”的满分锚点。低于它说明成交仍较分散，高于它说明大部分换手集中在少数价格带。'],
+            ['读数口径', '&lt;35% 偏分散；35–69% 有一定集中；≥70% 才认为筹码高度集中。'],
+            ['使用提醒', '筹码集中不是方向信号。它只说明成交堆在哪些价格带，仍要结合趋势、支撑位和量价行为判断。']
+          ]
+        }}
+      }};
+
+      function closeModal() {{
+        const existing = document.querySelector('.support-help-modal');
+        if (existing) existing.remove();
+      }}
+
+      document.addEventListener('click', (event) => {{
+        const btn = event.target.closest('[data-support-help]');
+        if (!btn) {{
+          if (event.target.classList && event.target.classList.contains('support-help-modal')) closeModal();
+          return;
+        }}
+        const item = content[btn.getAttribute('data-support-help')];
+        if (!item) return;
+        closeModal();
+        const modal = document.createElement('div');
+        modal.className = 'support-help-modal';
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.34);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(2px);';
+        modal.innerHTML = '<div role="dialog" aria-modal="true" style="max-width:620px;width:100%;background:#ffffff;border-radius:14px;border:1px solid #e2e8f0;box-shadow:0 24px 70px rgba(15,23,42,0.24);overflow:hidden;color:#334155;">'
+          + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 18px 14px;background:linear-gradient(180deg,#f8fbff 0%,#ffffff 100%);border-bottom:1px solid #e5eefb;">'
+          + '<div><div style="font-weight:750;color:#0f172a;font-size:17px;line-height:1.25;">' + item.title + '</div>'
+          + '<div style="margin-top:5px;color:#64748b;font-size:12px;line-height:1.45;">' + item.subtitle + '</div></div>'
+          + '<button type="button" data-support-help-close aria-label="关闭" style="border:1px solid #e2e8f0;background:#f8fafc;color:#64748b;border-radius:999px;width:28px;height:28px;font-size:16px;line-height:24px;padding:0;box-shadow:0 1px 2px rgba(15,23,42,0.04);">×</button>'
+          + '</div>'
+          + '<div style="display:grid;gap:8px;padding:14px 18px 18px;background:#fff;">'
+          + item.body.map(row => '<div style="display:grid;grid-template-columns:84px 1fr;gap:10px;align-items:start;padding:10px 12px;border:1px solid #eef2f7;border-radius:10px;background:#fbfdff;">'
+            + '<div style="display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700;line-height:1;padding:6px 8px;white-space:nowrap;">' + row[0] + '</div>'
+            + '<div style="font-size:12px;line-height:1.65;color:#334155;">' + row[1] + '</div>'
+            + '</div>').join('')
+          + '</div>'
+          + '</div>';
+        modal.querySelector('[data-support-help-close]').addEventListener('click', closeModal);
+        document.body.appendChild(modal);
+      }});
+
+      document.addEventListener('keydown', (event) => {{
+        if (event.key === 'Escape') closeModal();
       }});
     }}
 
@@ -605,6 +714,22 @@ def render_html(
       const colors = ['#16a34a', '#f59e0b'];
       if (!el) return;
 
+      function stabilityBand(pct) {{
+        if (pct >= 75) return '高质量强支撑';
+        if (pct >= 60) return '强支撑';
+        if (pct >= 50) return '中等偏强，待确认';
+        if (pct >= 35) return '中等偏弱，只观察';
+        return '弱，不作为交易判断位';
+      }}
+
+      function confluenceBand(pct) {{
+        if (pct >= 70) return '很强共振';
+        if (pct >= 55) return '高共振';
+        if (pct >= 40) return '明确共振，值得看';
+        if (pct >= 25) return '有共振，但不够集中';
+        return '弱共振';
+      }}
+
       const oldMethod = el.parentElement.querySelector('.support-method-panel');
       if (oldMethod) oldMethod.remove();
       if (id === 'chart-2') {{
@@ -614,14 +739,14 @@ def render_html(
         const strongText = supportFocus.has_strong_support
           ? '当前已识别到稳定性 ≥60% 的强支撑，若跌破后快速收回，才会在图上标记“破位/收回”。'
           : '当前没有稳定性 ≥60% 的强支撑，所以不在图上标记“破位/收回”。';
-        method.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">'
+        method.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">'
           + '<div style="font-weight:700;color:#1e3a8a;font-size:12px;">支撑位怎么判断</div>'
-          + '<div style="color:#64748b;">强支撑门槛：稳定性 ≥60%</div>'
+          + '<div style="color:#64748b;">先定位价格带，再判断关注是否集中、是否可靠。</div>'
           + '</div>'
-          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;">'
-          + '<div><div style="font-weight:600;color:#0f172a;">1. 先找候选</div><div>前低、平台下沿、整数关口都算候选。候选越接近，说明市场可能在同一价格带反复关注。</div></div>'
-          + '<div><div style="font-weight:600;color:#0f172a;">2. 再合并区间</div><div>价格足够接近的候选会合成一个支撑区间；区间太宽会扣分，因为防线不够集中。</div></div>'
-          + '<div><div style="font-weight:600;color:#0f172a;">3. 最后看稳定性</div><div>稳定性看证据质量、类型多样性、重复确认和区间宽度；共振表示这些证据在同一区间重合的程度。</div></div>'
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">'
+          + '<div><div style="font-weight:600;color:#0f172a;">1. 先找候选</div><div>从前低、平台下沿、整数关口里找可能被市场关注的价格点，再把接近的点合并成支撑区间。</div></div>'
+          + '<div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">2. 看共振 <button type="button" data-support-help="confluence" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>共振看不同依据是否指向同一价格带；≥40% 说明这个区间值得重点观察。</div></div>'
+          + '<div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">3. 看稳定性 <button type="button" data-support-help="stability" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>稳定性看候选质量、重复确认、类型多样性和区间宽度；≥60% 才叫强支撑。</div></div>'
           + '</div>'
           + '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #dbeafe;color:#475569;">'
           + strongText + ' 关键观察支撑可以用于跟踪和风控，但不等同于强支撑。'
@@ -708,7 +833,7 @@ def render_html(
         const style = document.createElement('style');
         style.id = tooltipStyleId;
         style.textContent = `
-          .support-tip {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; border: 1px solid #cbd5e1; color: #64748b; font-size: 11px; cursor: help; margin: -2px 2px; vertical-align: middle; }}
+          .support-tip {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 999px; border: 1px solid #cbd5e1; color: #64748b; font-size: 9px; line-height: 12px; cursor: help; margin: -1px 1px; vertical-align: middle; }}
           .support-tip-bubble {{ display: none; position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); width: 220px; padding: 8px 10px; border-radius: 8px; border: 1px solid #e5e7eb; background: #fff; color: #334155; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14); line-height: 1.5; z-index: 40; }}
           .support-tip-bubble::after {{ content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: #fff; }}
           .support-tip:hover .support-tip-bubble {{ display: block; }}
@@ -722,10 +847,11 @@ def render_html(
           const color = colors[i] || '#64748b';
           const sources = (z.sources || []).join(' / ');
           const strength = Math.round((z.strength || 0) * 100);
-          const confluence = z.confluence != null ? ' · 共振 ' + Math.round((z.confluence || 0) * 100) + '%' : '';
+          const confluenceScore = z.confluence != null ? Math.round((z.confluence || 0) * 100) : null;
+          const confluence = confluenceScore != null ? ' · 共振 ' + confluenceScore + '%（' + confluenceBand(confluenceScore) + '）' : '';
           const width = z.width_pct ? ' · 宽度 ' + z.width_pct + '%' : '';
-          const strengthLabel = z.stability_label || (strength >= 60 ? '强' : strength >= 35 ? '中' : '弱');
-          const tip = '支撑稳定性综合前低、平台、整数位、候选重复度和区间宽度。弱：<35%，中：35%–59%，强：≥60%；关键观察支撑表示结构重要但稳定性待确认。';
+          const strengthLabel = stabilityBand(strength);
+          const tip = '支撑位要同时看稳定性和共振。稳定性衡量支撑是否可靠，≥60% 才算强支撑；共振衡量不同依据是否集中到同一价格带，≥40% 就值得重点观察。';
           const role = z.display_role || '关注支撑';
           return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;background:#f9fafb;">'
             + '<div style="display:flex;align-items:center;gap:6px;font-weight:600;color:#111827;">'
@@ -784,14 +910,110 @@ def render_html(
       chart.timeScale().fitContent();
     }}
 
-    function renderVolumeProfile(id, vp) {{
+    function renderVolumeProfile(id, klines, vp, signalData, profileMap, profileMeta) {{
       const el = document.getElementById(id);
-      if (!el || !vp.length) {{ if (el) el.innerHTML = '<p class="text-xs text-gray-500 p-2">Volume Profile 数据不可用</p>'; return; }}
-      const maxVol = Math.max(...vp.map(b => b.volume));
-      el.innerHTML = '<div class="flex flex-col gap-0.5 p-2">' + vp.slice().reverse().map(b => {{
-        const pct = b.volume / maxVol * 100;
-        return `<div class="flex items-center gap-1"><span class="text-[9px] text-gray-500 w-12 text-right">${{b.price_level.toFixed(1)}}</span><div class="flex-1 h-2.5 bg-gray-100 rounded-sm overflow-hidden"><div class="h-full bg-blue-500/80 rounded-sm" style="width:${{pct}}%"></div></div><span class="text-[9px] text-gray-500 w-8">${{b.pct.toFixed(0)}}%</span></div>`;
-      }}).join('') + '</div>';
+      if (!el) return;
+      const profiles = profileMap && Object.keys(profileMap).length ? profileMap : {{ '20d': vp }};
+      const meta = profileMeta || {{}};
+      const availableKeys = ['3d', '20d', '60d'].filter(key => profiles[key] && profiles[key].length);
+      if (!availableKeys.length) {{
+        el.innerHTML = '<p class="text-xs text-gray-500 p-2">Volume Profile 数据不可用</p>';
+        return;
+      }}
+      el.style.height = 'auto';
+      const current = klines.length ? klines[klines.length - 1].close : null;
+      const defaultKey = profiles['20d'] ? '20d' : availableKeys[0];
+
+      function windowLabel(key) {{
+        const item = meta[key] || {{}};
+        const requested = Number(item.requested_days || key.replace('d', '')) || 20;
+        const actual = Number(item.actual_days || requested);
+        return actual < requested ? requested + '日(可用' + actual + '日)' : requested + '日';
+      }}
+
+      el.innerHTML = '<div class="chip-method-panel" style="border:1px solid #dbeafe;border-radius:8px;background:linear-gradient(180deg,#eff6ff 0%,#ffffff 100%);padding:10px 12px;margin:0 0 10px;color:#334155;font-size:11px;line-height:1.55;">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">'
+        + '<div style="font-weight:700;color:#1e3a8a;font-size:12px;">筹码集中怎么判断</div>'
+        + '<div style="color:#64748b;">看成交量是否集中堆在少数价格带，以及这些价格带离现价有多近。</div>'
+        + '</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">'
+        + '<div><div style="font-weight:600;color:#0f172a;">1. 先看位置</div><div>左侧是最近 K 线，右侧按价格高低排列成交密集区。</div></div>'
+        + '<div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">2. 看分布 <button type="button" data-support-help="chipProfile" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>横条越长，说明最近越多成交发生在该价格附近。</div></div>'
+        + '<div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">3. 看集中度 <button type="button" data-support-help="chipScore" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div class="chip-score-summary">切换 3/20/60 日窗口，观察短线和中期成交密集区。</div></div>'
+        + '</div>'
+        + '</div>'
+        + '<div class="chip-window-toolbar" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;font-size:11px;color:#64748b;">'
+        + '<span>筹码窗口</span><div style="display:inline-flex;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#f8fafc;">'
+        + availableKeys.map(key => '<button type="button" data-chip-window="' + key + '" style="padding:4px 10px;border:0;background:' + (key === defaultKey ? '#111827' : 'transparent') + ';color:' + (key === defaultKey ? '#fff' : '#64748b') + ';font-size:11px;">' + windowLabel(key) + '</button>').join('')
+        + '</div></div>'
+        + '<div style="display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:10px;align-items:stretch;">'
+        + '<div class="chip-kline-pane" style="height:340px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#fff;"></div>'
+        + '<div style="height:340px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;padding:8px;display:flex;flex-direction:column;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;color:#64748b;font-size:10px;"><span>价格</span><span>成交占比</span></div>'
+        + '<div class="chip-profile-rows" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;gap:1px;"></div>'
+        + '<div style="display:flex;gap:8px;align-items:center;margin-top:7px;color:#64748b;font-size:10px;">'
+        + '<span style="display:inline-flex;align-items:center;gap:4px;"><i style="width:8px;height:8px;border-radius:999px;background:#2563eb;display:inline-block;"></i>前3桶</span>'
+        + '<span style="display:inline-flex;align-items:center;gap:4px;"><i style="width:8px;height:8px;border-radius:999px;background:#38bdf8;display:inline-block;"></i>近现价</span>'
+        + '</div></div></div>';
+
+      const pane = el.querySelector('.chip-kline-pane');
+      const rowsEl = el.querySelector('.chip-profile-rows');
+      const summaryEl = el.querySelector('.chip-score-summary');
+      const chart = LightweightCharts.createChart(pane, {{
+        width: pane.clientWidth || 600,
+        height: 340,
+        layout: {{ background: {{ color: '#ffffff' }}, textColor: '#94a3b8' }},
+        grid: {{ vertLines: {{ color: '#f3f4f6' }}, horzLines: {{ color: '#f3f4f6' }} }},
+        crosshair: {{ mode: 0 }},
+        rightPriceScale: {{ borderColor: '#e5e7eb' }},
+        timeScale: {{ borderColor: '#e5e7eb', timeVisible: false, rightOffset: 4 }},
+        handleScroll: false,
+        handleScale: false,
+        localization: {{ locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' }},
+      }});
+      const candles = chart.addCandlestickSeries({{ upColor: '#dc2626', downColor: '#16a34a', borderVisible: false, wickUpColor: '#dc2626', wickDownColor: '#16a34a' }});
+      if (current != null) {{
+        candles.createPriceLine({{ price: current, color: '#0f172a', lineWidth: 1, lineStyle: 2, title: '现价' }});
+      }}
+      new ResizeObserver(() => chart.applyOptions({{ width: pane.clientWidth }})).observe(pane);
+
+      function renderWindow(key) {{
+        const activeVp = profiles[key] || [];
+        const days = Number(key.replace('d', '')) || 20;
+        const label = windowLabel(key);
+        const top3Pct = activeVp.slice().sort((a, b) => b.volume - a.volume).slice(0, 3).reduce((sum, b) => sum + Number(b.pct || 0), 0);
+        const scorePct = Math.round(Math.min(1, top3Pct / 60) * 100);
+        const topSet = new Set(activeVp.slice().sort((a, b) => b.volume - a.volume).slice(0, 3).map(b => b.price_level));
+        const maxVol = Math.max(...activeVp.map(b => b.volume), 1);
+        const rows = activeVp.slice().sort((a, b) => b.price_level - a.price_level);
+        rowsEl.innerHTML = rows.map(b => {{
+          const width = Math.max(2, b.volume / maxVol * 100);
+          const hot = topSet.has(b.price_level);
+          const nearCurrent = current != null && Math.abs(b.price_level - current) / current <= 0.01;
+          const bg = hot ? '#2563eb' : nearCurrent ? '#38bdf8' : '#cbd5e1';
+          const opacity = hot ? 0.88 : nearCurrent ? 0.8 : 0.62;
+          return '<div style="display:grid;grid-template-columns:44px 1fr 34px;gap:5px;align-items:center;min-height:9px;">'
+            + '<span style="font-size:9px;color:#64748b;text-align:right;font-variant-numeric:tabular-nums;">' + Number(b.price_level).toFixed(1) + '</span>'
+            + '<div style="height:8px;background:#f1f5f9;border-radius:999px;overflow:hidden;">'
+            + '<div style="height:100%;width:' + width.toFixed(1) + '%;background:' + bg + ';opacity:' + opacity + ';border-radius:999px;"></div>'
+            + '</div>'
+            + '<span style="font-size:9px;color:#64748b;font-variant-numeric:tabular-nums;">' + Number(b.pct || 0).toFixed(0) + '%</span>'
+            + '</div>';
+        }}).join('');
+        summaryEl.textContent = label + '前3桶占 ' + top3Pct.toFixed(1) + '%，确认度 ' + scorePct + '%。';
+        candles.setData(klines.slice(-Math.max(days, 20)).map(k => ({{ time: k.date, open: k.open, high: k.high, low: k.low, close: k.close }})));
+        chart.timeScale().fitContent();
+        el.querySelectorAll('button[data-chip-window]').forEach(btn => {{
+          const active = btn.getAttribute('data-chip-window') === key;
+          btn.style.background = active ? '#111827' : 'transparent';
+          btn.style.color = active ? '#fff' : '#64748b';
+        }});
+      }}
+
+      el.querySelectorAll('button[data-chip-window]').forEach(btn => {{
+        btn.addEventListener('click', () => renderWindow(btn.getAttribute('data-chip-window') || defaultKey));
+      }});
+      renderWindow(defaultKey);
     }}
 
     function renderIndexChart(id, indexKlines) {{
@@ -886,6 +1108,10 @@ def render_html(
     window.addEventListener('load', () => setTimeout(() => {{
       renderHero();
       attachDetailsToggleListeners();
+      attachSupportHelpModal();
+      document.querySelectorAll('details[data-chart-idx][open]').forEach(d => {{
+        renderSignalChart(d.getAttribute('data-chart-idx'));
+      }});
       attachSignalDetailTabs();
     }}, 100));
   </script>
@@ -1032,6 +1258,18 @@ def _render_signal_detail(s: SignalResult) -> str:
             f'</div>'
             f'</div>'
         )
+        volume_method_html = """<div class="volume-method-panel"
+       style="border:1px solid #dbeafe;border-radius:8px;background:linear-gradient(180deg,#eff6ff 0%,#ffffff 100%);padding:10px 12px;margin:0 0 10px;color:#334155;font-size:11px;line-height:1.55;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+    <div style="font-weight:700;color:#1e3a8a;font-size:12px;">缩量下跌怎么判断</div>
+    <div style="color:#64748b;">先确认下跌样本，再看抛压是否逐步变轻。</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+    <div><div style="font-weight:600;color:#0f172a;">1. 先看下跌日</div><div>只统计收盘低于前一日的交易日，避免把上涨日放量误判成抛压。</div></div>
+    <div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">2. 看量能是否缩 <button type="button" data-support-help="volumeBasis" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>比较单日、阶段、明显缩量和波段缩量，判断卖压是否下降。</div></div>
+    <div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">3. 看综合强弱 <button type="button" data-support-help="volumeScore" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>综合分越高，代表缩量证据越多；但它仍不是单独的买入信号。</div></div>
+  </div>
+</div>"""
 
         return f"""<style>
   .tooltip-wrap {{ position: relative; cursor: help; border-bottom: 1px dashed #9ca3af; display: inline; }}
@@ -1045,6 +1283,7 @@ def _render_signal_detail(s: SignalResult) -> str:
   .tooltip-wrap:hover .tooltip-bubble {{ display: block; }}
 </style>
 <div class="mt-4 text-xs">
+  {volume_method_html}
   {formula_html}
   <div class="mt-4 overflow-x-auto rounded-xl" style="border: 1px solid var(--color-divider);">
   <table class="w-full min-w-[720px] border-collapse" style="table-layout:fixed">
@@ -1128,6 +1367,21 @@ def _render_signal_card(s: SignalResult, chart_idx: int) -> str:
   <p class="text-xs text-gray-500 mt-2">{s.description}</p>
   {detail_html}
   <div id="chart-{chart_idx}" class="chart-container"></div>
+</div>"""
+
+
+def _render_support_method_panel() -> str:
+    return """<div class="support-method-panel"
+       style="border:1px solid #dbeafe;border-radius:8px;background:linear-gradient(180deg,#eff6ff 0%,#ffffff 100%);padding:10px 12px;margin:8px 0 10px;color:#334155;font-size:11px;line-height:1.55;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+    <div style="font-weight:700;color:#1e3a8a;font-size:12px;">支撑位怎么判断</div>
+    <div style="color:#64748b;">先定位价格带，再判断关注是否集中、是否可靠。</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+    <div><div style="font-weight:600;color:#0f172a;">1. 先找候选</div><div>从前低、平台下沿、整数关口里找可能被市场关注的价格点，再把接近的点合并成支撑区间。</div></div>
+    <div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">2. 看共振 <button type="button" data-support-help="confluence" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>共振看不同依据是否指向同一价格带；≥40% 说明这个区间值得重点观察。</div></div>
+    <div><div style="display:flex;align-items:center;gap:4px;font-weight:600;color:#0f172a;">3. 看稳定性 <button type="button" data-support-help="stability" style="width:14px;height:14px;border-radius:999px;border:1px solid #93c5fd;background:#fff;color:#2563eb;font-size:9px;line-height:12px;padding:0;">?</button></div><div>稳定性看候选质量、重复确认、类型多样性和区间宽度；≥60% 才叫强支撑。</div></div>
+  </div>
 </div>"""
 
 
@@ -1257,8 +1511,11 @@ def _render_signal_row(s: SignalResult, chart_idx: int, side: str) -> str:
     )
 
     detail_html = _render_signal_detail(s)  # vol_shrink 才返回非空
+    support_method_html = _render_support_method_panel() if chart_idx == 2 else ""
 
-    return f"""<details class="signal-row" data-chart-idx="{chart_idx}">
+    open_attr = " open" if chart_idx in (0, 2, 4) else ""
+
+    return f"""<details class="signal-row" data-chart-idx="{chart_idx}"{open_attr}>
   <summary class="signal-summary flex items-start justify-between flex-wrap sm:flex-nowrap py-3"
            style="border-top: 1px solid var(--color-divider);">
     <div class="flex-1 min-w-0">
@@ -1275,6 +1532,7 @@ def _render_signal_row(s: SignalResult, chart_idx: int, side: str) -> str:
   </summary>
   <div class="pb-4 px-1">
     {detail_html}
+    {support_method_html}
     <div id="chart-{chart_idx}" class="chart-container"></div>
   </div>
 </details>"""

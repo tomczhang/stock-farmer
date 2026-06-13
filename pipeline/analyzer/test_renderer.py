@@ -235,11 +235,34 @@ def test_render_html_injects_support_zone_chart_data():
     assert "data-support-tf=\"week\"" in html
     assert "data-support-tf=\"month\"" in html
     assert "支撑位怎么判断" in html
-    assert "前低、平台下沿、整数关口都算候选" in html
-    assert "价格足够接近的候选会合成一个支撑区间" in html
-    assert "共振表示这些证据在同一区间重合的程度" in html
-    assert "强支撑门槛：稳定性 ≥60%" in html
+    assert "先定位价格带，再判断关注是否集中、是否可靠" in html
+    assert "1. 先找候选" in html
+    assert "从前低、平台下沿、整数关口里找可能被市场关注的价格点" in html
+    assert "2. 看共振" in html
+    assert "data-support-help=\"confluence\"" in html
+    assert "3. 看稳定性" in html
+    assert "data-support-help=\"stability\"" in html
+    assert "width:14px;height:14px" in html
+    assert "font-size:9px;line-height:12px" in html
+    assert "共振怎么看" in html
+    assert "稳定性怎么算" in html
+    assert "每一类只取该区间内最高质量候选" in html
+    assert "当前权重" in html
+    assert "前低 40%，平台下沿 35%，整数关口 15%" in html
+    assert "grid-template-columns:84px 1fr" in html
+    assert "backdrop-filter:blur(2px)" in html
+    assert "共振看不同依据是否指向同一价格带" in html
+    assert "共振不是上涨概率，也不等于强支撑" in html
+    assert "前低看低点后 1–3 日是否快速反弹" in html
+    assert "平台下沿取低点 20% 分位，平台上沿取收盘价 80% 分位" in html
+    assert "箱体宽度 = (上沿 - 下沿) / 下沿" in html
+    assert "超过约 12% 不算有效平台" in html
+    assert "约 4% 或更窄接近满分" in html
+    assert "50–59 中等偏强、待确认；≥60 强支撑" in html
+    assert "支撑位要同时看稳定性和共振" in html
     assert "关键观察支撑可以用于跟踪和风控，但不等同于强支撑" in html
+    assert "support-help-modal" in html
+    assert "attachSupportHelpModal" in html
     assert "barSpacing: 8" in html
     assert '"signal_data"' in html
     assert '"support_zones"' in html
@@ -251,9 +274,8 @@ def test_render_html_injects_support_zone_chart_data():
     assert "support-zone-legend" in html
     assert "支撑稳定性" in html
     assert "support-tip-bubble" in html
-    assert "支撑稳定性综合前低、平台、整数位、候选重复度和区间宽度" in html
-    assert "关键观察支撑表示结构重要但稳定性待确认" in html
-    assert "弱：<35%，中：35%–59%，强：≥60%" in html
+    assert "稳定性衡量支撑是否可靠，≥60% 才算强支撑" in html
+    assert "共振衡量不同依据是否集中到同一价格带，≥40% 就值得重点观察" in html
     assert "mouseenter" in html
     assert "pointerenter" in html
     assert "click" in html
@@ -266,6 +288,88 @@ def test_volume_signal_chart_limits_visible_daily_klines():
     assert "const visibleKlines = klines.slice(-VOLUME_SIGNAL_VISIBLE_DAYS)" in html
     assert "candleSeries.setData(visibleKlines.map" in html
     assert ".filter(p => p && visibleTimes.has(p.time))" in html
+
+
+def test_chip_concentration_renders_profile_next_to_kline():
+    left = [
+        SignalResult(
+            id=f"L{i}", name=f"L{i}", category="left", confidence=0.5, light="yellow",
+            thresholds=(0.35, 0.7), weight=1, description="x", data={},
+        )
+        for i in range(4)
+    ]
+    left.append(SignalResult(
+        id="chip_concentration", name="筹码集中", category="left", confidence=0.36,
+        light="yellow", thresholds=(0.35, 0.7), weight=1,
+        description="前3价位桶占 21.6%，筹码较集中",
+        data={"top3_pct": 21.6},
+    ))
+    left.append(SignalResult(
+        id="market_env", name="大盘环境", category="left", confidence=0.5,
+        light="yellow", thresholds=(0.35, 0.7), weight=1, description="x", data={},
+    ))
+    right = [
+        SignalResult(
+            id=f"R{i}", name=f"R{i}", category="right", confidence=0.5,
+            light="yellow", thresholds=(0.4, 0.7), weight=1, description="x", data={},
+        )
+        for i in range(4)
+    ]
+    chart_data = {
+        "klines": [
+            {"date": "2026-01-01", "open": 100, "high": 105, "low": 98, "close": 103, "volume": 1_000_000},
+            {"date": "2026-01-02", "open": 103, "high": 106, "low": 101, "close": 102, "volume": 1_100_000},
+        ],
+        "volume_profile": [
+            {"price_level": 101.0, "volume": 1000, "pct": 10.0},
+            {"price_level": 102.0, "volume": 1200, "pct": 12.0},
+            {"price_level": 103.0, "volume": 960, "pct": 9.6},
+        ],
+        "volume_profiles": {
+            "3d": [
+                {"price_level": 101.0, "volume": 1000, "pct": 10.0},
+                {"price_level": 102.0, "volume": 1200, "pct": 12.0},
+                {"price_level": 103.0, "volume": 960, "pct": 9.6},
+            ],
+            "20d": [
+                {"price_level": 100.0, "volume": 1400, "pct": 14.0},
+                {"price_level": 101.0, "volume": 1200, "pct": 12.0},
+                {"price_level": 102.0, "volume": 800, "pct": 8.0},
+            ],
+            "60d": [
+                {"price_level": 98.0, "volume": 1500, "pct": 15.0},
+                {"price_level": 99.0, "volume": 1300, "pct": 13.0},
+                {"price_level": 100.0, "volume": 1100, "pct": 11.0},
+            ],
+        },
+        "volume_profile_meta": {
+            "3d": {"requested_days": 3, "actual_days": 3, "rows": 180},
+            "20d": {"requested_days": 20, "actual_days": 20, "rows": 1200},
+            "60d": {"requested_days": 60, "actual_days": 23, "rows": 1454},
+        },
+    }
+    html = render_html("X", "X", 102.0, 0.0, left + right, _make_phase(), "n", chart_data)
+
+    assert 'data-chart-idx="4" open' in html
+    assert "const volumeProfiles = DATA.volume_profiles || {}" in html
+    assert "const volumeProfileMeta = DATA.volume_profile_meta || {}" in html
+    assert "renderVolumeProfile('chart-4', klines, vp, DATA.signal_data?.chip_concentration || {}, volumeProfiles, volumeProfileMeta)" in html
+    assert "筹码集中怎么判断" in html
+    assert "左侧是最近 K 线，右侧按价格高低排列成交密集区" in html
+    assert "筹码窗口" in html
+    assert "data-chip-window" in html
+    assert "\"volume_profiles\"" in html
+    assert "\"volume_profile_meta\"" in html
+    assert "如果数据源不足，会标注实际可用天数" in html
+    assert "windowLabel" in html
+    assert "可用' + actual + '日" in html
+    assert 'data-support-help="chipProfile"' in html
+    assert 'data-support-help="chipScore"' in html
+    assert "确认度 = 前3价位桶占比 / 60%" in html
+    assert "例如前3桶占 21.6%，确认度就是 36%" in html
+    assert "chip-kline-pane" in html
+    assert "grid-template-columns:minmax(0,1fr) 170px" in html
+    assert "前3桶占 " in html
 
 
 def test_render_html_support_chart_shows_no_strong_placeholder():
@@ -503,6 +607,18 @@ def test_render_html_vol_shrink_5dim_in_details():
     # 5 维表头 + 公式标志同时存在；比值已合并到数据明细中。
     for token in ("综合评分 = ", "观察项", "判断标准", "数据明细", "实际/基准"):
         assert token in html, f"vol_shrink table token missing: {token}"
+    assert 'data-chart-idx="0" open' in html
+    assert "缩量下跌怎么判断" in html
+    assert "先确认下跌样本，再看抛压是否逐步变轻" in html
+    assert "1. 先看下跌日" in html
+    assert "2. 看量能是否缩" in html
+    assert 'data-support-help="volumeBasis"' in html
+    assert "3. 看综合强弱" in html
+    assert 'data-support-help="volumeScore"' in html
+    assert "缩量怎么看" in html
+    assert "缩量强弱怎么算" in html
+    assert "量价背离 30%，趋势缩量 25%，明显缩量 20%，阶段缩量 15%，单日缩量 10%" in html
+    assert "缩量下跌不是买入信号" in html
     assert "比值" not in html
     assert "MA20×80%=80万，实际/基准=100%" in html
 
