@@ -82,7 +82,7 @@ JS 段 MUST NOT 在 `window.load` 时立刻把 9 个信号 chart 全部渲染。
 
 #### Scenario: 明细表包含 10 行且都有 data-category
 
-- **WHEN** 输入完整 10 个信号
+- **WHEN** 输入完整 11 个信号
 - **THEN** "子信号明细" 区内 MUST 出现至少 10 个 `<tr` 标签,且每个含 `data-category="left"` 或 `data-category="right"` 之一
 
 #### Scenario: tabs 三个按钮齐备

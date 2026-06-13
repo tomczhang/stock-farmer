@@ -5,7 +5,7 @@
 
 ## 2. 信号计算引擎
 
-- [x] 2.1 实现 `signals.py` — `SignalResult` dataclass 定义 + 10 个信号的确定度计算函数
+- [x] 2.1 实现 `signals.py` — `SignalResult` dataclass 定义 + 11 个信号的确定度计算函数
 - [x] 2.2 实现 S1 缩量下跌：`clamp((1 - vol5/vol20) * 2.0, 0, 1)`
 - [x] 2.3 实现 S2 跌不动：比较近5日最低价 vs 前一个波段低点
 - [x] 2.4 实现 S3 假破位收回：检测破前低后3日内收回
@@ -14,9 +14,10 @@
 - [x] 2.7 实现 S6 大盘环境：指数相对 MA20 位置 + MA 方向
 - [x] 2.8 实现 S7 站回均线：`(close - MA20) / ATR`
 - [x] 2.9 实现 S8 放量反包：最近阳线成交量 / 20日均量
-- [x] 2.10 实现 S9 MACD金叉：DIF-DEA 差值归一化
-- [x] 2.11 实现 S10 低点抬升：近期两个低点差 / ATR
-- [x] 2.12 实现信号灯映射：confidence → light (red/yellow/green) 基于各信号独立阈值
+- [x] 2.10 实现 S9 回踩不破：假破位收回后回踩支撑区间且不跌破
+- [x] 2.11 实现 S10 MACD金叉：DIF-DEA 差值归一化
+- [x] 2.12 实现 S11 低点抬升：近期两个低点差 / ATR
+- [x] 2.13 实现信号灯映射：confidence → light (red/yellow/green) 基于各信号独立阈值
 
 ## 3. 阶段判断与结论
 

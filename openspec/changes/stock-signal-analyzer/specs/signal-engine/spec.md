@@ -2,11 +2,11 @@
 
 ### Requirement: Signal confidence calculation
 
-The system SHALL compute a confidence value (0.0 to 1.0) for each of the 10 signals, based on market data obtained from the `pipeline/data/` layer.
+The system SHALL compute a confidence value (0.0 to 1.0) for each of the 11 signals, based on market data obtained from the `pipeline/data/` layer.
 
-The 10 signals SHALL be:
+The 11 signals SHALL be:
 - **Left-side (6):** vol_shrink (缩量下跌), no_new_low (跌不动), false_breakdown (假破位收回), vol_contraction (波动收敛), chip_concentration (筹码集中), market_env (大盘环境)
-- **Right-side (4):** above_ma (站回均线), volume_breakout (放量反包), macd_cross (MACD金叉), higher_low (低点抬升)
+- **Right-side (5):** above_ma (站回均线), support_retest_hold (回踩不破), volume_breakout (放量反包), macd_cross (MACD金叉), higher_low (低点抬升)
 
 Each confidence value SHALL have a physically interpretable formula tied to observable market data.
 
@@ -21,6 +21,10 @@ Each confidence value SHALL have a physically interpretable formula tied to obse
 #### Scenario: Signal when close is below MA20
 - **WHEN** analyzer calculates signal "above_ma" and close < MA20
 - **THEN** confidence = 0.0 and light = "red"
+
+#### Scenario: Compute support_retest_hold confidence
+- **WHEN** analyzer detects a false breakdown reclaim and price later retests the reclaimed support zone without breaking below it
+- **THEN** signal "support_retest_hold" confidence is based on touch proximity, close-above-support strength, low-above-support strength, and support quality
 
 ### Requirement: Signal light mapping
 
@@ -75,7 +79,7 @@ The system SHALL compute an overall strength score as the weighted average of al
 
 Formula: `strength = sum(signal.confidence * signal.weight) / sum(signal.weight)`
 
-Signal weights: false_breakdown = 2, volume_breakout = 2, all others = 1.
+Signal weights: false_breakdown = 2, support_retest_hold = 2, volume_breakout = 2, all others = 1.
 
 The strength value SHALL be displayed with a range bar showing phase boundaries: [🔴 0-25% │ 🟡 25-45% │ 🟡⭐ 45-60% │ 🟢 60-80% │ 🟢🟢 80%+]
 
