@@ -672,3 +672,43 @@ def test_render_html_design_tokens_extended():
         "--radius-card", "--shadow-xs",
     ):
         assert var in head, f"existing token dropped: {var}"
+
+
+# ---------------- MA200 上方压力位标注 ----------------
+
+def test_render_html_ma200_resistance_draws_lines_and_note():
+    chart_data = {
+        "klines": [
+            {"date": "2026-01-01", "open": 40, "high": 42, "low": 39, "close": 41, "volume": 1_000_000},
+        ],
+        "trend_levels": {"ma200": 70.0, "current": 40.0, "role": "resistance", "distance_pct": 75.0},
+    }
+    html = render_html("0700.HK", "腾讯控股", 40.0, 0.0, _make_signals(), _make_phase(), "n", chart_data)
+    # Hero Python 文案（仅 resistance 态输出）
+    assert "上方第一压力(MA200)" in html
+    assert "70.00" in html
+    assert "+75.0%" in html
+    # trend_levels 透传进 DATA + 两图 JS 读取
+    assert '"role": "resistance"' in html
+    assert "const _heroTL = DATA.trend_levels" in html
+    assert "const _supTL = DATA.trend_levels" in html
+    # 两处 MA200 压力线（Hero 主图 + 回踩不破图各一条）
+    assert html.count("title: 'MA200 压力'") == 2
+
+
+def test_render_html_ma200_above_shows_note_without_resistance():
+    chart_data = {
+        "klines": [
+            {"date": "2026-01-01", "open": 160, "high": 162, "low": 159, "close": 161, "volume": 1_000_000},
+        ],
+        "trend_levels": {"ma200": 130.0, "current": 160.0, "role": "above", "distance_pct": -18.75},
+    }
+    html = render_html("0700.HK", "腾讯控股", 160.0, 0.0, _make_signals(), _make_phase(), "n", chart_data)
+    assert "站上 MA200" in html
+    assert "上方第一压力(MA200)" not in html
+
+
+def test_render_html_without_trend_levels_has_no_ma200_note():
+    html = render_html("AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "narrative")
+    assert "上方第一压力(MA200)" not in html
+    assert "站上 MA200" not in html

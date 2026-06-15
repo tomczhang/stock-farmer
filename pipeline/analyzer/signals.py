@@ -286,6 +286,33 @@ def _calc_atr(df: pd.DataFrame, window: int = 20) -> float:
     return atr if atr > 0 else 1.0
 
 
+def compute_ma200_levels(df: pd.DataFrame, current: float | None = None) -> dict[str, Any] | None:
+    """计算 MA200 趋势位（牛熊分界线）。
+
+    这是报告级辅助标注，**不是信号**——不进入 ``compute_all_signals``，
+    也不影响 ``phase.py`` 的绿灯计数与 ``compute_overall_strength`` 加权强度。
+
+    当现价低于 MA200 时，下行的 MA200 是反弹的第一道压力 / 第一目标位
+    (role="resistance")；现价站上 MA200 时角色翻转为支撑(role="above")。
+    数据不足 200 日时返回 None，调用方据此静默降级。
+    """
+    if df is None or len(df) < 200:
+        return None
+    closes = df["close"].astype(float)
+    ma200 = float(closes.tail(200).mean())
+    cur = float(current) if current is not None else float(closes.iloc[-1])
+    if cur <= 0 or ma200 <= 0:
+        return None
+    role = "resistance" if cur < ma200 else "above"
+    distance_pct = (ma200 - cur) / cur * 100
+    return {
+        "ma200": round(ma200, 2),
+        "current": round(cur, 2),
+        "role": role,
+        "distance_pct": round(distance_pct, 2),
+    }
+
+
 def _support_round_step(price: float) -> float:
     if price >= 500:
         return 20.0
