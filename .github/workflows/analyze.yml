@@ -8,21 +8,25 @@ on:
         required: true
         type: string
 
-  repository_dispatch:
-    types: [analyze]
+  schedule:
+    # 港股盘后（HKT 16:30 = UTC 08:30），错峰晚于 pipeline 半小时，工作日
+    - cron: '0 9 * * 1-5'
+    # 美股盘后（EST 16:30 = UTC 21:30），错峰晚于 pipeline 半小时，工作日
+    - cron: '0 22 * * 1-5'
 
+# 部署写 gh-pages，串行避免 push 冲突；批量定时任务不被后续触发取消。
 concurrency:
-  group: analyze-${{ github.event.inputs.ticker || github.event.client_payload.ticker || 'default' }}
-  cancel-in-progress: true
+  group: analyze
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
   analyze:
-    name: Analyze ${{ github.event.inputs.ticker || github.event.client_payload.ticker }}
+    name: Analyze
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
       - name: Checkout main
@@ -38,28 +42,39 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt yfinance
 
-      - name: Determine ticker
-        id: ticker
+      - name: Determine tickers
+        id: tickers
         run: |
-          TICKER="${{ github.event.inputs.ticker || github.event.client_payload.ticker }}"
-          echo "value=$TICKER" >> "$GITHUB_OUTPUT"
-          echo "Analyzing: $TICKER"
-
-      - name: Debug data source connectivity
-        run: |
-          echo "=== Test Xueqiu ==="
-          curl -s -o /dev/null -w "xueqiu.com: HTTP %{http_code}, size %{size_download}\n" https://xueqiu.com
-          curl -s -D- https://xueqiu.com 2>/dev/null | head -20
-          echo ""
-          echo "=== Test EastMoney ==="
-          curl -s -o /dev/null -w "push2: HTTP %{http_code}\n" 'https://push2.eastmoney.com/api/qt/stock/get?secid=116.00700&fields=f43,f57,f58'
-          echo ""
-          echo "=== Test Yahoo ==="
-          curl -s -o /dev/null -w "yahoo: HTTP %{http_code}\n" 'https://query2.finance.yahoo.com/v8/finance/chart/0700.HK?interval=1d&range=5d'
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TICKERS="${{ github.event.inputs.ticker }}"
+          else
+            # 定时批量：报告 watchlist（阵容对齐 db/seed_watchlist.sql，去掉指数 SPX）
+            TICKERS="AAPL MSFT NVDA GOOGL AMZN META TSLA TSM BRK.B UNH 0700.HK"
+          fi
+          echo "value=$TICKERS" >> "$GITHUB_OUTPUT"
+          echo "Tickers: $TICKERS"
 
       - name: Run analysis
         working-directory: pipeline
-        run: python analyze.py "${{ steps.ticker.outputs.value }}" --output-dir "${{ github.workspace }}/_site/reports"
+        run: |
+          OK=0 FAIL=0 FAILED_TICKERS=""
+          for t in ${{ steps.tickers.outputs.value }}; do
+            echo "::group::Analyze $t"
+            if python analyze.py "$t" --output-dir "${{ github.workspace }}/_site/reports"; then
+              OK=$((OK + 1))
+            else
+              FAIL=$((FAIL + 1))
+              FAILED_TICKERS="$FAILED_TICKERS $t"
+              echo "::warning::Analysis failed for $t"
+            fi
+            echo "::endgroup::"
+          done
+          echo "Summary: $OK ok, $FAIL failed.${FAILED_TICKERS:+ Failed:$FAILED_TICKERS}"
+          # 单股失败可容忍（批量容错），但全军覆没说明数据源/流水线坏了，必须报红。
+          if [ "$OK" -eq 0 ]; then
+            echo "::error::All analyses failed — no reports generated."
+            exit 1
+          fi
 
       - name: Checkout gh-pages
         uses: actions/checkout@v4
@@ -93,5 +108,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --staged --quiet && echo "No changes" && exit 0
-          git commit -m "Update report: ${{ steps.ticker.outputs.value }}"
+          git commit -m "Update reports"
           git push

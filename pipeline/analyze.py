@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from analyzer.signals import compute_all_signals
+from analyzer.signals import compute_all_signals, compute_ma200_levels
 from analyzer.phase import determine_phase
 from analyzer.narrative import generate_narrative
 from analyzer.renderer import render_html
@@ -146,6 +146,7 @@ def analyze(ticker: str, output_dir: str | None = None) -> str:
             if profile
         },
         "volume_profile_meta": volume_profile_meta,
+        "trend_levels": compute_ma200_levels(df, price),
     }
 
     # 渲染 HTML

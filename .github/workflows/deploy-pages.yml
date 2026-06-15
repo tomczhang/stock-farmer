@@ -1,0 +1,45 @@
+name: deploy-pages
+
+# 把 main 上的前端 pages/index.html 同步到 gh-pages 分支根，让前端改动自动上线。
+# 报告本身由 analyze.yml 部署到 gh-pages/reports/，两者互不干扰。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pages/index.html'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Sync index.html to gh-pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: _gh-pages
+
+      - name: Sync index.html
+        run: cp pages/index.html _gh-pages/index.html
+
+      - name: Deploy to gh-pages
+        run: |
+          cd _gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "Sync index.html from main"
+          git push

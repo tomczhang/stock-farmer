@@ -8,6 +8,7 @@ import pytest
 from analyzer.signals import (
     SignalResult,
     compute_all_signals,
+    compute_ma200_levels,
     _calc_vol_shrink,
     _calc_above_ma,
     _calc_false_breakdown,
@@ -49,6 +50,30 @@ def _make_df(n: int = 60, trend: str = "flat") -> pd.DataFrame:
         "close": close,
         "volume": volume.astype(int),
     })
+
+
+class TestMA200Levels:
+    def test_returns_none_when_under_200_rows(self):
+        assert compute_ma200_levels(_make_df(199)) is None
+
+    def test_resistance_when_price_below_ma200(self):
+        df = _make_df(200, trend="down")
+        result = compute_ma200_levels(df)
+        assert result is not None
+        assert result["role"] == "resistance"
+        assert result["distance_pct"] > 0
+        expected_ma = float(df["close"].astype(float).tail(200).mean())
+        assert abs(result["ma200"] - expected_ma) < 0.01
+
+    def test_above_when_price_above_ma200(self):
+        result = compute_ma200_levels(_make_df(200, trend="up"))
+        assert result is not None
+        assert result["role"] == "above"
+
+    def test_not_included_in_compute_all_signals(self):
+        signals = compute_all_signals(_make_df(200))
+        assert len(signals) == 11
+        assert all("ma200" not in s.id for s in signals)
 
 
 class TestSignals:

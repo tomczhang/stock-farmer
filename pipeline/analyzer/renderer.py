@@ -215,7 +215,8 @@ def render_html(
     right_signals = [s for s in signals if s.category == "right"]
 
     confirmation = _compute_confirmation(signals)
-    hero_html = _render_hero(phase, confirmation)
+    trend_levels = (chart_data or {}).get("trend_levels")
+    hero_html = _render_hero(phase, confirmation, trend_levels)
     left_panel = _render_signal_group_panel("left", left_signals, confirmation["left"], 0)
     right_panel = _render_signal_group_panel("right", right_signals, confirmation["right"], 6)
     detail_table = _render_signal_detail_table(signals)
@@ -360,6 +361,11 @@ def render_html(
       }});
       area.priceScale().applyOptions({{ scaleMargins: {{ top: 0.05, bottom: 0.32 }} }});
       area.setData(klines.map(k => ({{ time: k.date, value: k.close }})));
+      // MA200 上方第一压力 / 反弹第一目标位（仅现价低于 MA200 时）
+      const _heroTL = DATA.trend_levels;
+      if (_heroTL && _heroTL.role === 'resistance') {{
+        area.createPriceLine({{ price: _heroTL.ma200, color: '#7c3aed', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'MA200 压力' }});
+      }}
       // 成交量 histogram (下方 ~30%)
       const vol = chart.addHistogramSeries({{ priceFormat: {{ type: 'volume' }}, priceScaleId: 'vol' }});
       vol.priceScale().applyOptions({{ scaleMargins: {{ top: 0.7, bottom: 0 }} }});
@@ -790,6 +796,12 @@ def render_html(
           series.createPriceLine({{ price: z.low, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' }});
           series.createPriceLine({{ price: z.high, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' }});
         }});
+
+        // MA200 上方第一压力（与下方支撑形成「上压力/下支撑」夹击视图）
+        const _supTL = DATA.trend_levels;
+        if (_supTL && _supTL.role === 'resistance') {{
+          series.createPriceLine({{ price: _supTL.ma200, color: '#7c3aed', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'MA200 压力' }});
+        }}
 
         const ev = signalData.breakdown_event || {{}};
         const retest = signalData.retest_event || {{}};
@@ -1463,10 +1475,35 @@ def _render_hero_formula(conf: dict) -> str:
 </div>"""
 
 
-def _render_hero(phase: PhaseResult, conf: dict) -> str:
+def _render_ma200_note(trend_levels: dict | None) -> str:
+    """Hero 主图下方 MA200 趋势位说明行（牛熊分界线）。
+
+    resistance: 上方第一压力 + 价格 + 距现价百分比;above: 中性提示;None: 空。
+    """
+    if not trend_levels:
+        return ""
+    role = trend_levels.get("role")
+    if role == "resistance":
+        ma200 = float(trend_levels.get("ma200") or 0)
+        dist = float(trend_levels.get("distance_pct") or 0)
+        text = (
+            '<span style="display:inline-block;width:12px;border-top:2px dashed #7c3aed;'
+            'vertical-align:middle;margin-right:6px;"></span>'
+            f'上方第一压力(MA200):<strong class="tabular-nums" style="color: var(--text-primary);">${ma200:.2f}</strong>'
+            f' · 距现价 <strong class="tabular-nums" style="color: var(--text-primary);">+{dist:.1f}%</strong>'
+        )
+    elif role == "above":
+        text = '已站上 MA200(牛熊线上方)'
+    else:
+        return ""
+    return f'<div class="text-[11px] mt-2" style="color: var(--text-secondary);">{text}</div>'
+
+
+def _render_hero(phase: PhaseResult, conf: dict, trend_levels: dict | None = None) -> str:
     """Hero 双栏:左 1/3 圆环+phase+公式;右 2/3 lightweight-charts 主图容器。"""
     circle = _render_hero_circle(phase)
     formula = _render_hero_formula(conf)
+    ma200_note = _render_ma200_note(trend_levels)
     return f"""<section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
   <div class="md:col-span-1 rounded-2xl p-5"
        style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
@@ -1480,6 +1517,7 @@ def _render_hero(phase: PhaseResult, conf: dict) -> str:
       <span class="text-[11px]" style="color: var(--text-muted);">收盘价 + 成交量</span>
     </div>
     <div id="chart-hero" class="chart-container" style="height: 320px;"></div>
+    {ma200_note}
   </div>
 </section>"""
 
