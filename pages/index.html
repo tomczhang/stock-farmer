@@ -15,19 +15,19 @@
     <!-- Hero -->
     <header class="text-center mb-10">
       <h1 class="text-3xl md:text-4xl font-bold mb-2">stock-farmer</h1>
-      <p class="text-gray-400">输入股票代码，生成 10 信号诊断报告</p>
+      <p class="text-gray-400">查看 10 信号诊断报告</p>
     </header>
 
-    <!-- Input -->
+    <!-- Search -->
     <form id="analyzeForm" onsubmit="return handleSubmit(event)"
           class="flex items-center gap-3 max-w-md mx-auto mb-4">
-      <input id="tickerInput" type="text" placeholder="输入代码 如 AAPL、0700.HK、9992.HK"
-             autofocus
+      <input id="tickerInput" type="text" placeholder="搜索股票代码 如 AAPL、0700.HK"
+             autofocus autocomplete="off"
              class="flex-1 bg-[#1a1f2e] border border-gray-600 rounded-xl px-4 py-3 text-base
                     focus:border-blue-500 focus:outline-none text-gray-100 placeholder-gray-500">
       <button id="submitBtn" type="submit"
               class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-medium transition-colors whitespace-nowrap">
-        分析
+        查看
       </button>
     </form>
     <p id="status" class="text-center text-sm text-gray-500 mb-10 h-5"></p>
@@ -43,16 +43,14 @@
       <p>仅供参考，不构成投资建议</p>
       <p class="mt-1">
         <a href="https://github.com/tomczhang/stock-farmer" class="hover:text-gray-400">GitHub</a>
-        <span class="mx-2">·</span>
-        <button onclick="resetToken()" class="hover:text-gray-400 underline">重置 Token</button>
       </p>
     </footer>
   </div>
 
   <script>
-    const REPO = 'tomczhang/stock-farmer';
     const statusEl = document.getElementById('status');
-    const btn = document.getElementById('submitBtn');
+    const inputEl = document.getElementById('tickerInput');
+    let allReports = [];
 
     // Load reports
     loadReports();
@@ -62,109 +60,51 @@
         const base = window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '');
         const r = await fetch(base + '/reports/index.json');
         if (!r.ok) return;
-        const reports = await r.json();
-        if (!reports.length) return;
-
+        allReports = await r.json();
+        if (!allReports.length) return;
+        // Sort by date descending（最新在前，便于"查看"取最新一份）
+        allReports.sort((a, b) => b.date.localeCompare(a.date));
         document.getElementById('reportsSection').classList.remove('hidden');
-        const list = document.getElementById('reportsList');
-        // Sort by date descending
-        reports.sort((a, b) => b.date.localeCompare(a.date));
-        list.innerHTML = reports.map(r => {
-          const dateStr = r.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
-          return `<a href="reports/${r.file}" class="block bg-[#1a1f2e] rounded-lg border border-gray-700/40 px-4 py-3 hover:border-blue-500/50 transition-colors">
+        renderReports(allReports);
+      } catch(e) { /* no reports yet */ }
+    }
+
+    function renderReports(reports) {
+      const list = document.getElementById('reportsList');
+      if (!reports.length) {
+        list.innerHTML = '<p class="text-sm text-gray-500 px-1">没有匹配的报告</p>';
+        return;
+      }
+      list.innerHTML = reports.map(r => {
+        const dateStr = r.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
+        return `<a href="reports/${r.file}" class="block bg-[#1a1f2e] rounded-lg border border-gray-700/40 px-4 py-3 hover:border-blue-500/50 transition-colors">
             <div class="flex items-center justify-between">
               <span class="font-medium">${r.ticker}</span>
               <span class="text-xs text-gray-500">${dateStr}</span>
             </div>
           </a>`;
-        }).join('');
-      } catch(e) { /* no reports yet */ }
+      }).join('');
     }
 
+    // 实时过滤历史报告列表
+    inputEl.addEventListener('input', (e) => {
+      const q = e.target.value.trim().toUpperCase();
+      statusEl.textContent = '';
+      renderReports(q ? allReports.filter(r => r.ticker.toUpperCase().includes(q)) : allReports);
+    });
+
+    // 回车/点击"查看"：跳转匹配到的最新报告，无匹配则提示
     function handleSubmit(e) {
       e.preventDefault();
-      const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
-      if (!ticker) return false;
-
-      // Check for existing report first
-      const today = new Date().toISOString().slice(0,10).replace(/-/g, '');
-      const reportUrl = `reports/${ticker}_${today}.html`;
-
-      const token = localStorage.getItem('gh_token');
-      if (!token) {
-        const t = prompt('首次使用需输入 GitHub Personal Access Token\n\n生成方式：GitHub → Settings → Developer Settings → Personal Access Tokens → Fine-grained\n权限：Contents (read/write) + Actions (read/write)');
-        if (!t) return false;
-        localStorage.setItem('gh_token', t.trim());
-        triggerAnalyze(ticker, t.trim());
+      const q = inputEl.value.trim().toUpperCase();
+      if (!q) return false;
+      const matches = allReports.filter(r => r.ticker.toUpperCase().includes(q));
+      if (matches.length) {
+        window.location.href = 'reports/' + matches[0].file;  // allReports 已按日期降序
       } else {
-        triggerAnalyze(ticker, token);
+        statusEl.innerHTML = `<span class="text-gray-400">暂无『${q}』报告</span>`;
       }
       return false;
-    }
-
-    async function triggerAnalyze(ticker, token) {
-      btn.textContent = '提交中...';
-      btn.disabled = true;
-      statusEl.textContent = '';
-
-      try {
-        const r = await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `token ${token}`,
-            'Accept': 'application/vnd.github+json',
-          },
-          body: JSON.stringify({
-            event_type: 'analyze',
-            client_payload: { ticker }
-          })
-        });
-
-        if (r.status === 204 || r.ok) {
-          btn.textContent = '已触发 ✓';
-          statusEl.innerHTML = `<span class="text-green-400">✓ 分析已触发，约 1 分钟后生成</span>
-            <a href="https://github.com/${REPO}/actions" target="_blank" class="text-blue-400 hover:underline ml-2">查看进度 →</a>`;
-          // Poll for result
-          pollReport(ticker);
-        } else if (r.status === 401 || r.status === 403) {
-          localStorage.removeItem('gh_token');
-          statusEl.innerHTML = '<span class="text-red-400">Token 无效或权限不足，请重新输入</span>';
-        } else {
-          statusEl.innerHTML = `<span class="text-red-400">触发失败: HTTP ${r.status}</span>`;
-        }
-      } catch(e) {
-        statusEl.innerHTML = `<span class="text-red-400">网络错误: ${e.message}</span>`;
-      }
-      setTimeout(() => { btn.textContent = '分析'; btn.disabled = false; }, 3000);
-    }
-
-    async function pollReport(ticker) {
-      const today = new Date().toISOString().slice(0,10).replace(/-/g, '');
-      const url = `reports/${ticker}_${today}.html`;
-      let attempts = 0;
-      const maxAttempts = 24; // 2 minutes
-      const interval = setInterval(async () => {
-        attempts++;
-        if (attempts > maxAttempts) {
-          clearInterval(interval);
-          statusEl.innerHTML += '<br><span class="text-yellow-400">超时，请手动刷新页面检查</span>';
-          return;
-        }
-        try {
-          const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-          if (r.ok) {
-            clearInterval(interval);
-            statusEl.innerHTML = `<span class="text-green-400">✓ 报告已生成！</span>
-              <a href="${url}" class="text-blue-400 hover:underline ml-2">查看报告 →</a>`;
-            setTimeout(() => window.location.href = url, 1500);
-          }
-        } catch(e) { /* keep polling */ }
-      }, 5000);
-    }
-
-    function resetToken() {
-      localStorage.removeItem('gh_token');
-      statusEl.innerHTML = '<span class="text-gray-400">Token 已清除</span>';
     }
   </script>
 </body>
