@@ -145,6 +145,8 @@
 ,
   {"ticker": "META", "date": "20260630", "file": "META_20260630.html"}
 ,
+  {"ticker": "META", "date": "20260701", "file": "META_20260701.html"}
+,
   {"ticker": "MSFT", "date": "20260616", "file": "MSFT_20260616.html"}
 ,
   {"ticker": "MSFT", "date": "20260617", "file": "MSFT_20260617.html"}
