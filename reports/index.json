@@ -45,6 +45,8 @@
 ,
   {"ticker": "0700.HK", "date": "20260715", "file": "0700.HK_20260715.html"}
 ,
+  {"ticker": "0700.HK", "date": "20260716", "file": "0700.HK_20260716.html"}
+,
   {"ticker": "9992.HK", "date": "20260601", "file": "9992.HK_20260601.html"}
 ,
   {"ticker": "AAPL", "date": "20260616", "file": "AAPL_20260616.html"}
@@ -504,4 +506,6 @@
   {"ticker": "UNH", "date": "20260714", "file": "UNH_20260714.html"}
 ,
   {"ticker": "UNH", "date": "20260715", "file": "UNH_20260715.html"}
+,
+  {"ticker": "UNH", "date": "20260716", "file": "UNH_20260716.html"}
 ]
