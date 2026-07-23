@@ -8,12 +8,27 @@ from typing import Any
 
 import pandas as pd
 
+from .backtest import (
+    DEFAULT_TREND_WINDOW,
+    AsOfOutOfRange,
+    build_right_trend,
+    clamp_trend_window,
+    cutoff_daily,
+    forward_outcome_labels,
+    historical_price_and_change,
+    parse_as_of,
+    resolve_effective_date,
+)
 from .narrative import generate_narrative
 from .phase import PhaseResult, determine_phase
 from .signals import SignalResult, compute_all_signals
 
 
 _RIGHT_TIER_BREAK = 0.55
+
+# 分层诊断阈值（结构强度百分比）。
+_DIAGNOSIS_STRONG = 60
+_DIAGNOSIS_WEAK = 40
 
 _RIGHT_STATE_LABELS: dict[str, str] = {
     "default": "未触发",
@@ -41,11 +56,37 @@ def resolve_right_state(confidence: float, thresholds: tuple[float, float]) -> s
     return "warning"
 
 
-def build_signal_report(ticker: str) -> dict[str, Any]:
-    """Run the Python analysis chain and return a JSON-serializable report."""
-    from pipeline.data import get_klines, get_quotes
+def build_signal_report(
+    ticker: str,
+    as_of: str | None = None,
+    trend_window: int | None = DEFAULT_TREND_WINDOW,
+) -> dict[str, Any]:
+    """Run the Python analysis chain and return a JSON-serializable report.
+
+    当 `as_of` 为 None 时保持原有「当前分析」行为；提供 `as_of` 时进入历史复盘
+    模式：按有效交易日截断日线、指数和价格，禁止任何未来数据进入信号计算。
+    """
+    get_klines, get_quotes = _data_fns()
 
     df = get_klines(ticker, period="1d", count=1260)
+
+    historical = as_of is not None
+    trend_window = clamp_trend_window(trend_window)
+
+    # ---- 解析有效分析日期并截断日线 ----
+    requested_as_of: str | None = None
+    if historical:
+        as_of_date = parse_as_of(as_of)
+        requested_as_of = as_of_date.strftime("%Y-%m-%d")
+        effective_date = resolve_effective_date(df, as_of_date)
+        if effective_date is None:
+            raise AsOfOutOfRange(
+                f"as_of={requested_as_of} 早于 {ticker} 可用历史首日"
+            )
+        analysis_df = cutoff_daily(df, effective_date)
+    else:
+        analysis_df = df
+        effective_date = _last_date(df)
 
     try:
         quotes = get_quotes([ticker])
@@ -53,31 +94,56 @@ def build_signal_report(ticker: str) -> dict[str, Any]:
     except Exception:
         quote = None
 
-    try:
-        volume_profiles, volume_profile_meta = _build_volume_profile_windows(ticker)
-    except Exception:
+    # ---- 成交密集区：历史模式无法保证分钟截断，降级为空 profile ----
+    if historical:
         volume_profiles, volume_profile_meta = {}, {}
-    volume_profile = volume_profiles.get("20d") or volume_profiles.get("3d") or []
+        volume_profile = []
+        volume_profile_mode = "unavailable_historical"
+    else:
+        try:
+            volume_profiles, volume_profile_meta = _build_volume_profile_windows(ticker)
+        except Exception:
+            volume_profiles, volume_profile_meta = {}, {}
+        volume_profile = volume_profiles.get("20d") or volume_profiles.get("3d") or []
+        volume_profile_mode = "current_minute" if volume_profile else "unavailable"
 
-    try:
-        index_df = get_klines("SPY", period="1d", count=30)
-    except Exception:
-        index_df = None
+    # ---- 指数环境：历史模式拉长窗口后按有效日期截断 ----
+    index_df = _load_index_df(get_klines, historical=historical, effective_date=effective_date)
 
     signals = compute_all_signals(
-        df,
+        analysis_df,
         volume_profile=volume_profile,
         index_df=index_df,
     )
-    phase = determine_phase(signals)
+    phase = determine_phase(signals, df=analysis_df)
 
     name = quote.name if quote and quote.name else ticker
-    price = quote.price if quote else _last_close(df)
-    change_pct = quote.change_pct if quote else None
+    if historical:
+        price, change_pct = historical_price_and_change(analysis_df)
+    else:
+        price = quote.price if quote else _last_close(df)
+        change_pct = quote.change_pct if quote else None
     narrative = generate_narrative(ticker, name, signals, phase)
 
+    right_trend = build_right_trend(
+        df,
+        effective_date=effective_date,
+        window=trend_window,
+        index_df=index_df,
+    )
+
+    report_context = build_report_context(
+        df,
+        mode="historical" if historical else "current",
+        requested_as_of=requested_as_of,
+        effective_date=effective_date,
+        trend_window=trend_window,
+        used_historical_cutoff=historical,
+        volume_profile_mode=volume_profile_mode,
+    )
+
     chart_data = {
-        "klines": _records(df),
+        "klines": _records(analysis_df),
         "index_klines": _records(index_df[["date", "close"]])
         if index_df is not None and len(index_df) > 0
         else [],
@@ -99,7 +165,64 @@ def build_signal_report(ticker: str) -> dict[str, Any]:
         phase=phase,
         narrative=narrative,
         chart_data=chart_data,
+        report_context=report_context,
+        right_trend=right_trend,
     )
+
+
+def _data_fns():
+    """返回 (get_klines, get_quotes)，兼容包内（pipeline.data）与测试根（data）两种导入。"""
+    try:
+        from pipeline.data import get_klines, get_quotes
+    except ModuleNotFoundError:
+        from data import get_klines, get_quotes
+    return get_klines, get_quotes
+
+
+def _load_index_df(get_klines, *, historical: bool, effective_date: str | None):
+    """加载指数日线；历史模式拉长窗口并按有效日期截断，避免未来数据。"""
+    try:
+        if historical:
+            index_df = get_klines("SPY", period="1d", count=1260)
+            if effective_date is not None and index_df is not None:
+                index_df = cutoff_daily(index_df, effective_date)
+            return index_df
+        return get_klines("SPY", period="1d", count=30)
+    except Exception:
+        return None
+
+
+def build_report_context(
+    df: pd.DataFrame,
+    *,
+    mode: str,
+    requested_as_of: str | None,
+    effective_date: str | None,
+    trend_window: int,
+    used_historical_cutoff: bool,
+    volume_profile_mode: str,
+) -> dict[str, Any]:
+    """构建历史复盘 metadata，并在历史模式下附带 effective_date 的前瞻结果标签。"""
+    forward_outcomes = None
+    if used_historical_cutoff and effective_date is not None and df is not None and len(df):
+        labels_list = [str(v).split()[0] if str(v) else str(v) for v in df["date"].tolist()]
+        if effective_date in labels_list:
+            pos = len(labels_list) - 1 - labels_list[::-1].index(effective_date)
+            closes = df["close"].astype(float).tolist()
+            forward_outcomes = forward_outcome_labels(closes, pos)
+
+    return {
+        "mode": mode,
+        "requested_as_of": requested_as_of,
+        "effective_date": effective_date,
+        "data_start_date": _first_date(df),
+        "data_end_date": _last_date(df),
+        "trend_window": trend_window,
+        "used_historical_cutoff": used_historical_cutoff,
+        "volume_profile_mode": volume_profile_mode,
+        "forward_outcomes": forward_outcomes,
+        "rules_version": "1",
+    }
 
 
 def build_demo_signal_report(ticker: str = "DEMO") -> dict[str, Any]:
@@ -232,9 +355,20 @@ def build_demo_signal_report(ticker: str = "DEMO") -> dict[str, Any]:
             data={},
         ),
     ]
-    phase = determine_phase(signals)
+    phase = determine_phase(signals, df=df)
     name = "右侧趋势演示"
     narrative = generate_narrative(ticker, name, signals, phase)
+    effective_date = _last_date(df)
+    right_trend = build_right_trend(df, effective_date=effective_date, window=DEFAULT_TREND_WINDOW)
+    report_context = build_report_context(
+        df,
+        mode="current",
+        requested_as_of=None,
+        effective_date=effective_date,
+        trend_window=DEFAULT_TREND_WINDOW,
+        used_historical_cutoff=False,
+        volume_profile_mode="demo",
+    )
     return make_report_payload(
         ticker=ticker,
         name=name,
@@ -244,6 +378,8 @@ def build_demo_signal_report(ticker: str = "DEMO") -> dict[str, Any]:
         phase=phase,
         narrative=narrative,
         chart_data={"klines": _records(df), "index_klines": [], "volume_profile": []},
+        report_context=report_context,
+        right_trend=right_trend,
     )
 
 
@@ -257,12 +393,22 @@ def make_report_payload(
     phase: PhaseResult,
     narrative: str,
     chart_data: dict[str, Any],
+    report_context: dict[str, Any] | None = None,
+    right_trend: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     left = [s for s in signals if s.category == "left"]
     right = [s for s in signals if s.category == "right"]
 
-    left_summary = _group_summary("left", "左侧信号", left)
-    right_summary = _group_summary("right", "右侧信号", right)
+    left_summary = _group_summary(
+        "left", "左侧信号", left,
+        role_label="左侧准备度",
+        role_desc="底部结构、抛压缓和、波动收敛等准备条件。",
+    )
+    right_summary = _group_summary(
+        "right", "右侧信号", right,
+        role_label="右侧触发度",
+        role_desc="站均线、放量、回踩不破、动量与低点抬升等启动条件。",
+    )
     total_weight = left_summary["weight"] + right_summary["weight"]
 
     return {
@@ -279,6 +425,9 @@ def make_report_payload(
             "formula": "右侧趋势确认度 = 左侧信号加权分 + 右侧信号加权分",
             "left": left_summary,
             "right": right_summary,
+            "score_label": "结构强度",
+            "score_caption": "总分代表当前结构 / 趋势确认强度，不代表准确率、胜率或上涨概率。",
+            "diagnosis": _build_diagnosis(left_summary["score_pct"], right_summary["score_pct"]),
         },
         "signals": [_signal_payload(s) for s in signals],
         "groups": {
@@ -287,11 +436,52 @@ def make_report_payload(
         },
         "narrative": narrative,
         "chart_data": chart_data,
+        "report_context": report_context or _current_report_context(),
+        "right_trend": right_trend or {"window": DEFAULT_TREND_WINDOW, "points": []},
         "disclaimer": "仅供研究复盘，不构成投资建议。",
     }
 
 
-def _group_summary(key: str, label: str, signals: list[SignalResult]) -> dict[str, Any]:
+def _current_report_context() -> dict[str, Any]:
+    """无历史上下文时（如 demo）的默认 current 元数据。"""
+    return {
+        "mode": "current",
+        "requested_as_of": None,
+        "effective_date": None,
+        "data_start_date": None,
+        "data_end_date": None,
+        "trend_window": DEFAULT_TREND_WINDOW,
+        "used_historical_cutoff": False,
+        "volume_profile_mode": "unavailable",
+        "forward_outcomes": None,
+        "rules_version": "1",
+    }
+
+
+def _build_diagnosis(left_pct: int, right_pct: int) -> str:
+    """根据左侧准备度与右侧触发度给出分层诊断，避免总分被读成上涨概率。"""
+    strong, weak = _DIAGNOSIS_STRONG, _DIAGNOSIS_WEAK
+    if left_pct >= strong and right_pct < weak:
+        return "左侧准备充分，但右侧触发不足，结构已就位、确认未完成，继续观察右侧触发位。"
+    if right_pct >= strong and left_pct < weak:
+        return "右侧强触发，但左侧筑底不足，属于强启动待回踩确认，需后续走势跟进确认。"
+    if left_pct >= strong and right_pct >= strong:
+        return "左侧准备度与右侧触发度同时较强，趋势结构较完整。"
+    if left_pct >= strong:
+        return "左侧准备度较强，右侧触发度中等，关注右侧触发是否进一步走强。"
+    if right_pct >= strong:
+        return "右侧触发度较强，左侧准备度中等，关注底部结构是否补强。"
+    return "左右两侧均处于偏弱区间，结构强度有限，继续等待更多信号。"
+
+
+def _group_summary(
+    key: str,
+    label: str,
+    signals: list[SignalResult],
+    *,
+    role_label: str = "",
+    role_desc: str = "",
+) -> dict[str, Any]:
     weight = sum(s.weight for s in signals)
     weighted_score = (
         sum(s.confidence * s.weight for s in signals) / weight if weight else 0.0
@@ -304,6 +494,8 @@ def _group_summary(key: str, label: str, signals: list[SignalResult]) -> dict[st
         "weight": weight,
         "confirmed_count": sum(1 for s in signals if s.light == "green"),
         "total_count": len(signals),
+        "role_label": role_label,
+        "role_desc": role_desc,
     }
 
 
@@ -406,6 +598,18 @@ def _last_close(df: pd.DataFrame) -> float | None:
     if len(df) == 0 or "close" not in df:
         return None
     return _finite_or_none(df["close"].iloc[-1])
+
+
+def _last_date(df: pd.DataFrame | None) -> str | None:
+    if df is None or len(df) == 0 or "date" not in df:
+        return None
+    return str(df["date"].iloc[-1]).split()[0]
+
+
+def _first_date(df: pd.DataFrame | None) -> str | None:
+    if df is None or len(df) == 0 or "date" not in df:
+        return None
+    return str(df["date"].iloc[0]).split()[0]
 
 
 def _demo_klines() -> pd.DataFrame:

@@ -117,11 +117,15 @@ export function getHealth(): Promise<HealthResponse> {
 
 export function getSignalReport(
   ticker: string,
-  options: { demo?: boolean } = {},
+  options: { demo?: boolean; asOf?: string | null; trendWindow?: number } = {},
 ): Promise<SignalReportResponse> {
   const encoded = encodeURIComponent(ticker);
-  const demoQuery = options.demo ? "?demo=1" : "";
+  const params = new URLSearchParams();
+  if (options.demo) params.set("demo", "1");
+  if (options.asOf) params.set("as_of", options.asOf);
+  if (options.trendWindow) params.set("trend_window", String(options.trendWindow));
+  const query = params.toString();
   return request<SignalReportResponse>(
-    `/api/signal-report/${encoded}${demoQuery}`,
+    `/api/signal-report/${encoded}${query ? `?${query}` : ""}`,
   );
 }

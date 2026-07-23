@@ -114,6 +114,59 @@ export interface SignalReportGroupSummary {
   weight: number;
   confirmed_count: number;
   total_count: number;
+  /** 左侧=「左侧准备度」，右侧=「右侧触发度」 */
+  role_label: string;
+  /** 该侧分数代表什么的简短说明 */
+  role_desc: string;
+}
+
+/**
+ * 轻量前瞻结果标签：仅作复盘 / 证伪展示，绝不参与 as-of 当天判断。
+ * 某个水平未来交易日不足时为 null。
+ */
+export interface ForwardOutcomeLabels {
+  d5_pct: number | null;
+  d10_pct: number | null;
+  d20_pct: number | null;
+  max_gain_20d_pct: number | null;
+  max_drawdown_20d_pct: number | null;
+}
+
+/** 右侧趋势序列中的一个摘要点 */
+export interface RightTrendPoint {
+  date: string;
+  close: number;
+  /** 窗口内归一化收盘价 0~100，便于与确认度同轴叠放 */
+  normalized_close_pct: number;
+  /** 总结构强度百分比 */
+  score_pct: number;
+  /** 右侧触发度百分比 */
+  right_score_pct: number;
+  phase: string;
+  right_confirmed_count: number;
+  right_total_count: number;
+  /** 每个右侧信号的 4 态 key */
+  states: Record<string, "default" | "warning-soft" | "warning" | "success">;
+  forward_returns: ForwardOutcomeLabels | null;
+}
+
+export interface RightTrend {
+  window: number;
+  points: RightTrendPoint[];
+}
+
+/** 历史复盘元数据：说明分析日期如何解析、用了哪段数据窗口 */
+export interface ReportContext {
+  mode: "current" | "historical";
+  requested_as_of: string | null;
+  effective_date: string | null;
+  data_start_date: string | null;
+  data_end_date: string | null;
+  trend_window: number;
+  used_historical_cutoff: boolean;
+  volume_profile_mode: string;
+  forward_outcomes: ForwardOutcomeLabels | null;
+  rules_version: string;
 }
 
 export interface SignalReportResponse {
@@ -129,6 +182,8 @@ export interface SignalReportResponse {
     trigger: string;
     strength: number;
     strength_pct: number;
+    /** 价格趋势状态：uptrend / downtrend / range / unknown */
+    regime?: "uptrend" | "downtrend" | "range" | "unknown";
   };
   confirmation: {
     score: number;
@@ -137,6 +192,11 @@ export interface SignalReportResponse {
     formula: string;
     left: SignalReportGroupSummary;
     right: SignalReportGroupSummary;
+    /** 总分语义标签：「结构强度」，非准确率 / 胜率 / 概率 */
+    score_label: string;
+    score_caption: string;
+    /** 左右分层诊断文案 */
+    diagnosis: string;
   };
   signals: SignalReportSignal[];
   groups: {
@@ -153,5 +213,7 @@ export interface SignalReportResponse {
       pct: number;
     }>;
   };
+  report_context: ReportContext;
+  right_trend: RightTrend;
   disclaimer: string;
 }

@@ -672,3 +672,147 @@ def test_render_html_design_tokens_extended():
         "--radius-card", "--shadow-xs",
     ):
         assert var in head, f"existing token dropped: {var}"
+
+
+# ---------------- 历史复盘 / 证伪镜 / 结构强度语义 ----------------
+
+def _historical_context() -> dict:
+    return {
+        "mode": "historical",
+        "requested_as_of": "2026-05-16",
+        "effective_date": "2026-05-15",
+        "data_start_date": "2021-01-04",
+        "data_end_date": "2026-06-13",
+        "trend_window": 30,
+        "used_historical_cutoff": True,
+        "volume_profile_mode": "unavailable_historical",
+        "forward_outcomes": {
+            "d5_pct": 2.1, "d10_pct": -0.4, "d20_pct": 6.8,
+            "max_gain_20d_pct": 9.3, "max_drawdown_20d_pct": -3.2,
+        },
+        "rules_version": "1",
+    }
+
+
+def _right_trend(points: int = 3) -> dict:
+    pts = []
+    for i in range(points):
+        pts.append({
+            "date": f"2026-05-{10 + i:02d}",
+            "close": 100.0 + i,
+            "normalized_close_pct": 40 + i,
+            "score_pct": 50 + i,
+            "right_score_pct": 60 + i,
+            "phase": "右侧初步确认",
+            "right_confirmed_count": 3,
+            "right_total_count": 5,
+            "states": {"above_ma": "success"},
+            "forward_returns": {
+                "d5_pct": 1.0, "d10_pct": 2.0, "d20_pct": 3.0,
+                "max_gain_20d_pct": 4.0, "max_drawdown_20d_pct": -1.0,
+            },
+        })
+    return {"window": 30, "points": pts}
+
+
+def test_render_html_historical_banner_present():
+    html = render_html(
+        "AAPL", "Apple", 180.0, 0.5, _make_signals(), _make_phase(), "n",
+        report_context=_historical_context(), right_trend=_right_trend(),
+    )
+    assert "历史复盘" in html
+    assert "有效交易日" in html
+    assert "2026-05-15" in html
+    # 请求日期与有效日期不同时显示对齐说明
+    assert "2026-05-16" in html
+    # 前瞻结果标签 chips
+    assert "后5日" in html and "20日最大回撤" in html
+
+
+def test_render_html_current_mode_has_no_historical_banner():
+    ctx = _historical_context()
+    ctx["mode"] = "current"
+    html = render_html(
+        "AAPL", "Apple", 180.0, 0.5, _make_signals(), _make_phase(), "n",
+        report_context=ctx,
+    )
+    # 当前分析模式不再渲染冗余的"当前分析/历史复盘"上下文条。
+    assert ">历史复盘</span>" not in html
+
+
+def _phase_with_regime(regime: str) -> PhaseResult:
+    return PhaseResult(
+        phase="趋势运行中" if regime == "uptrend" else "仍在下跌",
+        icon="📈", action="x", trigger="y",
+        strength=0.2, strength_pct=20, regime=regime,
+    )
+
+
+def test_render_html_trend_fit_banner_uptrend_says_not_applicable():
+    html = render_html(
+        "AAPL", "Apple", 296.0, 0.5, _make_signals(), _phase_with_regime("uptrend"), "n",
+    )
+    assert "上升趋势中途" in html
+    assert "本工具适用性：不适合" in html
+
+
+def test_render_html_trend_fit_banner_downtrend_says_applicable():
+    html = render_html(
+        "AAPL", "Apple", 100.0, -0.5, _make_signals(), _phase_with_regime("downtrend"), "n",
+    )
+    assert "下跌趋势" in html
+    assert "本工具适用性：适合" in html
+
+
+def test_render_html_trend_fit_absent_when_regime_unknown():
+    html = render_html(
+        "AAPL", "Apple", 100.0, 0.0, _make_signals(), _make_phase(), "n",
+    )
+    # 注释里含"本工具适用性"不算；检查渲染出的徽章（带冒号）。
+    assert "本工具适用性：" not in html
+
+
+def test_render_html_score_semantics_structure_strength():
+    html = render_html(
+        "AAPL", "Apple", 180.0, 0.5, _make_signals(), _make_phase(), "n",
+        report_context=_historical_context(), right_trend=_right_trend(),
+    )
+    assert "结构强度（非准确率" in html
+    assert "分层诊断" in html
+    assert "左侧准备度" in html and "右侧触发度" in html
+
+
+def test_render_html_trend_mirror_present_with_points():
+    html = render_html(
+        "AAPL", "Apple", 180.0, 0.5, _make_signals(), _make_phase(), "n",
+        report_context=_historical_context(), right_trend=_right_trend(),
+    )
+    assert 'id="chart-trend-mirror"' in html
+    assert "renderRightTrendMirror" in html
+    assert '"right_trend"' in html
+
+
+def test_render_html_trend_mirror_absent_without_points():
+    html = render_html(
+        "AAPL", "Apple", 180.0, 0.5, _make_signals(), _make_phase(), "n",
+        report_context=_historical_context(), right_trend={"window": 30, "points": []},
+    )
+    assert 'id="chart-trend-mirror"' not in html
+
+
+def test_render_html_preserves_tradingview_and_clickable_signals():
+    """历史模式不能破坏既有 TradingView 图与可点开信号。"""
+    html = render_html(
+        "AAPL", "Apple", 180.0, 0.5, _make_signals(), _make_phase(), "n",
+        report_context=_historical_context(), right_trend=_right_trend(),
+    )
+    assert "lightweight-charts" in html  # TradingView
+    assert "data-chart-idx" in html       # 可点开信号 details
+
+
+def test_render_html_backward_compatible_without_new_params():
+    """不传 report_context / right_trend 时不渲染 banner 与证伪镜。"""
+    html = render_html("AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "n")
+    assert 'id="chart-trend-mirror"' not in html
+    # 不应渲染历史复盘徽章（HTML 注释里出现"历史复盘"不算）。
+    assert ">历史复盘</span>" not in html

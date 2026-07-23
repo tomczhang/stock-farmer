@@ -819,3 +819,182 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- 历史复盘 / 证伪镜（add-right-signal-backtest） ---- */
+
+.ghost-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ghost-button:hover {
+  border-color: var(--accent);
+}
+
+.ghost-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.context-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--text-muted, #6f7a89);
+}
+
+.context-banner .context-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.context-banner.current .context-tag {
+  background: #eef2f7;
+  color: #4b5563;
+}
+
+.context-banner.historical {
+  border-color: #c7d7f0;
+  background: #f3f7ff;
+}
+
+.context-banner.historical .context-tag {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.score-caption {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, #6f7a89);
+}
+
+.diagnosis-card {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-soft, #f8fafc);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diagnosis-card strong {
+  font-size: 13px;
+  line-height: 1.55;
+  font-weight: 600;
+}
+
+.summary-meter .role-desc {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted, #8a94a3);
+}
+
+.trend-mirror-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 18px;
+  box-shadow: var(--shadow-xs);
+}
+
+.trend-mirror-section .mirror-hint {
+  font-size: 12px;
+  color: var(--text-muted, #8a94a3);
+  max-width: 320px;
+  text-align: right;
+}
+
+.trend-mirror-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-muted, #8a94a3);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .trend-mirror-section .mirror-hint {
+    text-align: left;
+    max-width: none;
+  }
+}
+
+/* ---- 趋势状态 + 本工具适用性（add-trend-regime） ---- */
+
+.trend-fit-banner {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--text-muted, #6f7a89);
+}
+
+.trend-fit-banner.applicable {
+  border-left-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.trend-fit-banner.caution {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+
+.trend-fit-banner.neutral {
+  border-left-color: #6b7280;
+  background: var(--surface-soft, #f8fafc);
+}
+
+.trend-fit-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.trend-fit-label {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text, #0f172a);
+}
+
+.trend-fit-tag {
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #475569;
+}
+
+.trend-fit-banner.applicable .trend-fit-tag { background: #16a34a; }
+.trend-fit-banner.caution .trend-fit-tag { background: #d97706; }
+
+.trend-fit-banner p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}

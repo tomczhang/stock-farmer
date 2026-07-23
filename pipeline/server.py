@@ -7,11 +7,32 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+from pipeline.analyzer.backtest import BacktestError
 from pipeline.analyzer.report import build_demo_signal_report, build_signal_report
+
+
+_INVALID = object()  # sentinel：trend_window 解析失败
 
 
 class SignalReportHandler(BaseHTTPRequestHandler):
     server_version = "stock-farmer-python-api/0.1"
+
+    @staticmethod
+    def _parse_trend_window(params: dict[str, list[str]]) -> int | None | object:
+        """解析可选的 trend_window 查询参数。
+
+        未提供时返回 None（交由 report 层使用默认窗口）；非正整数返回 _INVALID。
+        """
+        raw = params.get("trend_window", [None])[0]
+        if raw is None or str(raw).strip() == "":
+            return None
+        try:
+            value = int(str(raw).strip())
+        except ValueError:
+            return _INVALID
+        if value <= 0:
+            return _INVALID
+        return value
 
     def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib hook
         self._send_empty(HTTPStatus.NO_CONTENT)
@@ -31,12 +52,28 @@ class SignalReportHandler(BaseHTTPRequestHandler):
 
             params = parse_qs(parsed.query)
             demo = params.get("demo", ["0"])[0] in {"1", "true", "yes"}
-            try:
-                payload = (
-                    build_demo_signal_report(ticker)
-                    if demo or ticker == "DEMO"
-                    else build_signal_report(ticker)
+            as_of = params.get("as_of", [None])[0]
+            if as_of is not None:
+                as_of = as_of.strip() or None
+            trend_window = self._parse_trend_window(params)
+            if trend_window is _INVALID:
+                self._send_error(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_trend_window",
+                    "trend_window 必须为正整数",
                 )
+                return
+
+            try:
+                if demo or ticker == "DEMO":
+                    payload = build_demo_signal_report(ticker)
+                else:
+                    payload = build_signal_report(
+                        ticker, as_of=as_of, trend_window=trend_window
+                    )
+            except BacktestError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, "invalid_as_of", str(exc))
+                return
             except Exception as exc:  # pragma: no cover - integration boundary
                 self._send_error(
                     HTTPStatus.INTERNAL_SERVER_ERROR,

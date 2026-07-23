@@ -3,17 +3,62 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+import pandas as pd
+
 from .signals import SignalResult
 
 
 @dataclass
 class PhaseResult:
-    phase: str          # "仍在下跌" / "底部特征初现" / ...
-    icon: str           # 🔴 / 🟡 / 🟡⭐ / 🟢 / 🟢🟢
+    phase: str          # "仍在下跌" / "底部特征初现" / "趋势运行中" / ...
+    icon: str           # 🔴 / 🟡 / 🟡⭐ / 🟢 / 🟢🟢 / 📈
     action: str         # 操作建议
     trigger: str        # 触发条件
     strength: float     # 综合强度 0-1
     strength_pct: int   # 百分比展示
+    regime: str = "unknown"  # 价格趋势状态：uptrend / downtrend / range / unknown
+
+
+def compute_trend_regime(df: "pd.DataFrame | None") -> str:
+    """从价格结构判断宏观趋势状态，独立于 11 个反转信号。
+
+    这套框架本质是底部反转探测器；对已经在上升趋势中途的个股，反转信号天然
+    不触发、得分很低，但这并不等于"下跌趋势"。本函数用均线结构区分：
+    - uptrend：收盘 > MA200 且 MA50 > MA200 且 MA50 上行
+    - downtrend：收盘 < MA200 且 MA50 < MA200 且 MA50 下行
+    - 数据不足 200 根时退化为 MA50 与其斜率的简化判断
+    - 其余为 range / unknown
+    """
+    if df is None or len(df) < 60 or "close" not in df:
+        return "unknown"
+    closes = df["close"].astype(float).values
+    n = len(closes)
+    last = float(closes[-1])
+
+    def _ma(window: int) -> float | None:
+        return float(np.mean(closes[-window:])) if n >= window else None
+
+    ma50 = _ma(50)
+    ma200 = _ma(200)
+    # MA50 在约 20 个交易日前的值，用于判断斜率。
+    ma50_prev = float(np.mean(closes[-70:-20])) if n >= 70 else None
+
+    if ma200 is None:
+        if ma50 is not None and ma50_prev is not None:
+            if last > ma50 and ma50 > ma50_prev:
+                return "uptrend"
+            if last < ma50 and ma50 < ma50_prev:
+                return "downtrend"
+        return "range"
+
+    rising = ma50_prev is not None and ma50 > ma50_prev
+    falling = ma50_prev is not None and ma50 < ma50_prev
+    if last > ma200 and ma50 > ma200 and rising:
+        return "uptrend"
+    if last < ma200 and ma50 < ma200 and falling:
+        return "downtrend"
+    return "range"
 
 
 _PHASES = [
@@ -28,7 +73,10 @@ _PHASES = [
 ]
 
 
-def determine_phase(signals: list[SignalResult]) -> PhaseResult:
+def determine_phase(
+    signals: list[SignalResult],
+    df: "pd.DataFrame | None" = None,
+) -> PhaseResult:
     left_green = sum(1 for s in signals if s.category == "left" and s.light == "green")
     right_green = sum(1 for s in signals if s.category == "right" and s.light == "green")
 
@@ -45,9 +93,19 @@ def determine_phase(signals: list[SignalResult]) -> PhaseResult:
     strength = compute_overall_strength(signals)
     strength_pct = int(round(strength * 100))
 
+    regime = compute_trend_regime(df) if df is not None else "unknown"
+    # regime 修正：框架判为"仍在下跌"但价格其实在上升趋势中途，
+    # 说明它只是"没有反转买点"，不是看空——单列为「趋势运行中」。
+    if phase == "仍在下跌" and regime == "uptrend":
+        phase = "趋势运行中"
+        icon = "📈"
+        action = "已在上升趋势中，非本框架的右侧反转买点；如需参与请用趋势跟随 / 回调策略"
+        trigger = "等待出现回调筑底后，本框架才会再给右侧反转信号"
+
     return PhaseResult(
         phase=phase, icon=icon, action=action,
         trigger=trigger, strength=strength, strength_pct=strength_pct,
+        regime=regime,
     )
 
 

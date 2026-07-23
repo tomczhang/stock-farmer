@@ -181,6 +181,8 @@ def render_html(
     phase: PhaseResult,
     narrative: str,
     chart_data: dict | None = None,
+    report_context: dict | None = None,
+    right_trend: dict | None = None,
 ) -> str:
     """渲染完整 HTML 报告。
 
@@ -189,6 +191,8 @@ def render_html(
         "index_klines": [{date, close}, ...] (可选),
         "volume_profile": [{price_level, volume, pct}, ...] (可选),
     }
+    report_context: 历史复盘元数据（mode / requested_as_of / effective_date / ...，可选）。
+    right_trend: {"window": N, "points": [...]} 右侧趋势证伪镜序列（可选）。
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     klines = (chart_data or {}).get("klines") or []
@@ -216,6 +220,10 @@ def render_html(
 
     confirmation = _compute_confirmation(signals)
     hero_html = _render_hero(phase, confirmation)
+    trend_fit_banner = _render_trend_fit(phase)
+    context_banner = _render_context_banner(report_context)
+    semantics_html = _render_score_semantics(confirmation)
+    mirror_html = _render_trend_mirror(right_trend)
     left_panel = _render_signal_group_panel("left", left_signals, confirmation["left"], 0)
     right_panel = _render_signal_group_panel("right", right_signals, confirmation["right"], 6)
     detail_table = _render_signal_detail_table(signals)
@@ -224,6 +232,7 @@ def render_html(
 
     chart_payload = dict(chart_data or {})
     chart_payload["signal_data"] = {s.id: s.data for s in signals}
+    chart_payload["right_trend"] = right_trend or {"window": 0, "points": []}
     chart_json = json.dumps(chart_payload, ensure_ascii=False, default=str)
 
     return f"""<!DOCTYPE html>
@@ -268,8 +277,20 @@ def render_html(
       <p class="text-xs mt-1" style="color: var(--text-muted);">分析时间：{now}</p>
     </header>
 
+    <!-- 趋势状态 + 本工具适用性 -->
+    {trend_fit_banner}
+
+    <!-- 历史复盘 / 当前分析 上下文 -->
+    {context_banner}
+
     <!-- Hero: 圆环 + 加权公式 + 趋势主图 -->
     {hero_html}
+
+    <!-- 结构强度语义 + 分层诊断 -->
+    {semantics_html}
+
+    <!-- 右侧趋势证伪镜 -->
+    {mirror_html}
 
     <!-- Narrative + Next Trigger -->
     <section class="rounded-2xl p-5 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4 items-start"
@@ -1105,14 +1126,80 @@ def render_html(
       setTimeout(() => btn.textContent = '分析', 3000);
     }}
 
+    function renderRightTrendMirror() {{
+      const el = document.getElementById('chart-trend-mirror');
+      if (!el) return;
+      const trend = DATA.right_trend || {{}};
+      const points = trend.points || [];
+      if (!points.length) return;
+      const w = el.clientWidth || el.parentElement.clientWidth || 600;
+      const chart = LightweightCharts.createChart(el, {{
+        width: w, height: 300,
+        layout: {{ background: {{ color: '#ffffff' }}, textColor: '#94a3b8' }},
+        grid: {{ vertLines: {{ color: '#f3f4f6' }}, horzLines: {{ color: '#f3f4f6' }} }},
+        crosshair: {{ mode: 0 }},
+        rightPriceScale: {{ borderColor: '#e5e7eb' }},
+        timeScale: {{ borderColor: '#e5e7eb', timeVisible: false }},
+        handleScroll: false, handleScale: false,
+        localization: {{ locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' }},
+      }});
+      const scoreSeries = chart.addLineSeries({{
+        color: '#2563eb', lineWidth: 2, priceScaleId: 'right',
+        title: '结构强度%',
+      }});
+      scoreSeries.setData(points.map(p => ({{ time: p.date, value: p.score_pct }})));
+      const priceSeries = chart.addLineSeries({{
+        color: '#16a34a', lineWidth: 2, lineStyle: 2, priceScaleId: 'right',
+        title: '归一化价格%',
+      }});
+      priceSeries.setData(points.map(p => ({{ time: p.date, value: p.normalized_close_pct }})));
+      chart.timeScale().fitContent();
+
+      // tooltip：阶段 / 右侧触发 / 前瞻结果标签
+      const tip = document.getElementById('trend-mirror-tip');
+      const byDate = {{}};
+      points.forEach(p => {{ byDate[p.date] = p; }});
+      chart.subscribeCrosshairMove(param => {{
+        if (!tip) return;
+        if (!param.time || !param.point) {{ tip.style.display = 'none'; return; }}
+        const p = byDate[param.time];
+        if (!p) {{ tip.style.display = 'none'; return; }}
+        const fwd = p.forward_returns;
+        const fwdStr = fwd ? formatForward(fwd) : '未来交易日不足';
+        tip.innerHTML =
+          '<strong>' + p.date + '</strong> · 收盘 ' + (p.close != null ? p.close.toFixed(2) : '-')
+          + '<br/>结构强度 ' + p.score_pct + '% · 阶段 ' + p.phase
+          + '<br/>右侧触发度 ' + p.right_score_pct + '% · 已触发 '
+          + p.right_confirmed_count + '/' + p.right_total_count
+          + '<br/>后续走势标签：' + fwdStr;
+        tip.style.display = 'block';
+      }});
+      new ResizeObserver(() => chart.applyOptions({{ width: el.clientWidth }})).observe(el);
+    }}
+
+    function formatForward(fwd) {{
+      const parts = [];
+      const push = (label, v) => {{
+        if (v !== null && v !== undefined && isFinite(v)) {{
+          parts.push(label + ' ' + (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
+        }}
+      }};
+      push('5日', fwd.d5_pct); push('10日', fwd.d10_pct); push('20日', fwd.d20_pct);
+      push('20日最高', fwd.max_gain_20d_pct); push('20日最大回撤', fwd.max_drawdown_20d_pct);
+      return parts.length ? parts.join(' · ') : '未来交易日不足';
+    }}
+
     window.addEventListener('load', () => setTimeout(() => {{
-      renderHero();
+      // 先挂载既有交互（可点开信号 / 帮助弹窗 / tabs），保证任何图表渲染异常都不会破坏它们。
       attachDetailsToggleListeners();
       attachSupportHelpModal();
+      attachSignalDetailTabs();
       document.querySelectorAll('details[data-chart-idx][open]').forEach(d => {{
         renderSignalChart(d.getAttribute('data-chart-idx'));
       }});
-      attachSignalDetailTabs();
+      try {{ renderHero(); }} catch (e) {{ console.error('hero render failed', e); }}
+      // 证伪镜为新增能力，单独 try/catch，绝不影响既有报告功能。
+      try {{ renderRightTrendMirror(); }} catch (e) {{ console.error('trend mirror render failed', e); }}
     }}, 100));
   </script>
 </body>
@@ -1482,6 +1569,164 @@ def _render_hero(phase: PhaseResult, conf: dict) -> str:
     <div id="chart-hero" class="chart-container" style="height: 320px;"></div>
   </div>
 </section>"""
+
+
+_DIAGNOSIS_STRONG = 60
+_DIAGNOSIS_WEAK = 40
+
+
+def _build_diagnosis(left_pct: int, right_pct: int) -> str:
+    """根据左侧准备度与右侧触发度给出分层诊断（与 report.py 同口径）。"""
+    strong, weak = _DIAGNOSIS_STRONG, _DIAGNOSIS_WEAK
+    if left_pct >= strong and right_pct < weak:
+        return "左侧准备充分，但右侧触发不足，结构已就位、确认未完成，继续观察右侧触发位。"
+    if right_pct >= strong and left_pct < weak:
+        return "右侧强触发，但左侧筑底不足，属于强启动待回踩确认，需后续走势跟进确认。"
+    if left_pct >= strong and right_pct >= strong:
+        return "左侧准备度与右侧触发度同时较强，趋势结构较完整。"
+    if left_pct >= strong:
+        return "左侧准备度较强，右侧触发度中等，关注右侧触发是否进一步走强。"
+    if right_pct >= strong:
+        return "右侧触发度较强，左侧准备度中等，关注底部结构是否补强。"
+    return "左右两侧均处于偏弱区间，结构强度有限，继续等待更多信号。"
+
+
+def _fmt_pct_signed(value) -> str:
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v:+.1f}%"
+
+
+_REGIME_FIT = {
+    "downtrend": (
+        "📉 下跌趋势", "适合", "var(--color-success)", "#f0fdf4",
+        "正可用本工具观察是否出现缩量筑底与右侧反转信号。",
+    ),
+    "uptrend": (
+        "📈 上升趋势中途", "不适合", "var(--color-warning)", "#fffbeb",
+        "本工具只捕捉底部反转买点；该股已在上升趋势中，确认度偏低属正常，不代表看空。如需参与请用趋势跟随 / 回调策略。",
+    ),
+    "range": (
+        "↔ 震荡 / 区间整理", "谨慎", "var(--color-default)", "var(--color-surface-secondary)",
+        "处于震荡区间，关注是否逐步构筑底部后，再等右侧反转确认。",
+    ),
+}
+
+
+def _render_trend_fit(phase: PhaseResult) -> str:
+    """显著表达当前趋势状态 + 本工具是否适用。regime 未知时不渲染。"""
+    info = _REGIME_FIT.get(getattr(phase, "regime", "unknown"))
+    if info is None:
+        return ""
+    label, fit, color_var, bg, explanation = info
+    return (
+        f'<section class="rounded-xl px-4 py-3 mb-6 text-sm" style="border: 1px solid var(--color-divider); border-left: 4px solid {color_var}; background: {bg}; color: var(--text-secondary);">'
+        '<div class="flex items-center gap-3 flex-wrap">'
+        f'<span class="text-sm font-semibold" style="color: var(--text-primary);">{label}</span>'
+        f'<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full" style="background: {color_var}; color: #ffffff;">本工具适用性：{fit}</span>'
+        '</div>'
+        f'<p class="text-xs mt-1.5 leading-relaxed">{explanation}</p>'
+        '</section>'
+    )
+
+
+def _render_context_banner(report_context: dict | None) -> str:
+    """历史复盘 / 当前分析 上下文条；historical 时附带前瞻结果标签。"""
+    if not report_context:
+        return ""
+    mode = report_context.get("mode")
+    if mode != "historical":
+        # 当前分析模式无需提示截断；趋势状态/适用性由 _render_trend_fit 统一表达。
+        return ""
+    requested = report_context.get("requested_as_of")
+    effective = report_context.get("effective_date")
+    aligned = requested and effective and requested != effective
+    fwd = report_context.get("forward_outcomes") or {}
+    fwd_html = ""
+    if fwd:
+        chips = "".join(
+            f'<span class="text-[11px] px-2 py-0.5 rounded-full" style="background: var(--color-surface); border: 1px solid var(--color-divider); color: var(--text-secondary);">{label} {_fmt_pct_signed(fwd.get(key))}</span>'
+            for label, key in (
+                ("后5日", "d5_pct"), ("后10日", "d10_pct"), ("后20日", "d20_pct"),
+                ("20日最高", "max_gain_20d_pct"), ("20日最大回撤", "max_drawdown_20d_pct"),
+            )
+        )
+        fwd_html = (
+            '<div class="mt-2 flex flex-wrap items-center gap-1.5">'
+            '<span class="text-[11px]" style="color: var(--text-muted);">后续走势标签（仅证伪，不参与当日判断）：</span>'
+            f'{chips}</div>'
+        )
+    aligned_html = (
+        f'（请求日期 {requested}，已对齐到最近交易日）' if aligned else ''
+    )
+    return (
+        '<section class="rounded-xl px-4 py-3 mb-6 text-sm"'
+        ' style="border: 1px solid var(--color-primary, #c7d7f0); background: #f3f7ff; color: var(--text-secondary);">'
+        '<div class="flex items-center gap-3 flex-wrap">'
+        '<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full" style="background: #2563eb; color: #ffffff;">历史复盘</span>'
+        f'<span>有效交易日 <strong style="color: var(--text-primary);">{effective}</strong>{aligned_html}，仅使用该日及之前的数据计算结论。</span>'
+        '</div>'
+        f'{fwd_html}'
+        '</section>'
+    )
+
+
+def _render_score_semantics(conf: dict) -> str:
+    """结构强度语义说明 + 左右分层诊断。明确总分不是准确率/胜率/概率。"""
+    left_pct = conf["left"]["score_pct"]
+    right_pct = conf["right"]["score_pct"]
+    diagnosis = _build_diagnosis(left_pct, right_pct)
+    return (
+        '<section class="rounded-2xl p-5 mb-6"'
+        ' style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">'
+        '<div class="flex items-baseline justify-between mb-2 flex-wrap gap-2">'
+        '<h3 class="text-sm font-semibold" style="color: var(--text-primary);">结构强度（非准确率 / 胜率 / 上涨概率）</h3>'
+        '<span class="text-[11px]" style="color: var(--text-muted);">总分仅代表当前结构 / 趋势确认强度</span>'
+        '</div>'
+        '<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">'
+        f'<div class="rounded-xl p-3" style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider);">'
+        f'<div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">左侧准备度 {left_pct}%</div>'
+        '<p class="text-xs mt-1" style="color: var(--text-secondary);">底部结构、抛压缓和、波动收敛等准备条件。</p></div>'
+        f'<div class="rounded-xl p-3" style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider);">'
+        f'<div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">右侧触发度 {right_pct}%</div>'
+        '<p class="text-xs mt-1" style="color: var(--text-secondary);">站均线、放量、回踩不破、动量与低点抬升等启动条件。</p></div>'
+        '</div>'
+        '<div class="rounded-xl p-3" style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider);">'
+        '<div class="text-[11px] uppercase tracking-wider mb-1" style="color: var(--text-muted);">分层诊断</div>'
+        f'<strong class="text-sm font-semibold" style="color: var(--text-primary);">{diagnosis}</strong>'
+        '</div>'
+        '</section>'
+    )
+
+
+def _render_trend_mirror(right_trend: dict | None) -> str:
+    """右侧趋势证伪镜区块：确认度 vs 归一化价格叠放折线 + tooltip 容器。"""
+    points = (right_trend or {}).get("points") or []
+    if not points:
+        return ""
+    return (
+        '<section class="rounded-2xl p-5 mb-6"'
+        ' style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">'
+        '<div class="flex items-baseline justify-between mb-2 flex-wrap gap-2">'
+        '<div>'
+        '<div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">复盘 / 证伪镜</div>'
+        '<h3 class="text-sm font-semibold" style="color: var(--text-primary);">右侧确认度 vs 价格走势</h3>'
+        '</div>'
+        '<span class="text-[11px] max-w-xs text-right" style="color: var(--text-muted);">用于校准判断是否领先 / 同步 / 滞后于价格，非预测 / 胜率 / 策略收益</span>'
+        '</div>'
+        '<div class="flex items-center gap-4 mb-2 text-[11px]" style="color: var(--text-secondary);">'
+        '<span class="flex items-center gap-1.5"><span style="display:inline-block;width:14px;height:2px;background:#2563eb;"></span>结构强度 %</span>'
+        '<span class="flex items-center gap-1.5"><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #16a34a;"></span>归一化价格 %</span>'
+        '</div>'
+        '<div id="chart-trend-mirror" class="chart-container" style="height: 300px;"></div>'
+        '<div id="trend-mirror-tip" class="text-[11px] mt-2 leading-relaxed" style="display:none; color: var(--text-secondary);"></div>'
+        '<p class="text-[11px] mt-2" style="color: var(--text-muted);">归一化价格＝窗口内最低收盘记为 0%、最高收盘记为 100% 的相对位置（仅用于和确认度比形状，非价位 / 非涨跌幅）。实际收盘价见悬停提示。</p>'
+        '</section>'
+    )
 
 
 def _render_signal_row(s: SignalResult, chart_idx: int, side: str) -> str:
