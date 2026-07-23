@@ -1,3 +1,66 @@
+# stock-farmer — Agent 指南
+
+> 给在本仓库工作的 AI agent。文末 `HEROUI-REACT-AGENTS-MD-*` 标记之间的块由 `heroui agents-md` 自动维护，**请勿手改**。本文件与 `AGENTS.md` 保持一致。
+
+## 项目是什么
+
+港美股股票分析工具（"价值观察站"），两条产品线：
+
+1. **PE-TTM 历史分位观察站**（README/v1）：输入 ticker，看当前 PE 处在自身历史区间（5y/10y/上市以来）的哪一分位，判断"贵不贵"。用最新版财报、不还原 Point-in-Time，**不做交易回测**。
+2. **右侧交易趋势信号分析器**（当前主力）：基于自由量价框架计算右侧确认度 / 阶段 / 信号，输出趋势报告与历史复盘（"证伪镜"），辅助人工判断右侧买点是否成立。
+
+定位：零月成本、零运维，生产环境全跑在 Cloudflare 免费层 + GitHub Actions。
+
+## 架构总览
+
+```
+GitHub Actions(cron 盘后) → Python pipeline(抓数/清洗/TTM拼接/分位/信号)
+  → Cloudflare D1(SQLite) → Cloudflare Workers API(TS/hono 薄层) → Cloudflare Pages 前端(React+Vite+ECharts)
+```
+
+- **离线计算** = `pipeline/`（Python，pandas/numpy）。
+- **生产 API** = `api/`（Cloudflare Workers + hono，只读 D1 转 JSON，p95 百毫秒级）。
+- **前端** = `web/`（React 18 + Vite + TypeScript + ECharts）。
+- **本地联调 API** = `pipeline/server.py`（**Python stdlib `http.server`，不是 FastAPI**），给前端提供 `/api/signal-report/<ticker>`。
+
+## 目录速览
+
+- `pipeline/` 离线流水线
+  - `analyzer/` 右侧信号核心：`signals.py`(信号) · `phase.py`(阶段) · `report.py`(组装报告/历史复盘) · `narrative.py`(文案) · `renderer.py`(静态 HTML 报告) · `backtest.py`(as-of 复盘/回测)
+  - `fetcher/` `data/` `compute/` `db/` 抓取 / 适配 / 计算 / 写库；`run.py` 离线入口；`analyze.py` 单票静态报告入口；`server.py` 本地 API；`tests/` pytest
+- `api/` Cloudflare Workers（`src/`，`wrangler.toml`，hono）
+- `web/` 前端（`src/components/`：PE 线 `PEHistoryChart`/`MetricsCards`/`WatchlistPanel`/`TimeRangeToggle`，右侧信号 `SignalTrendReport` 等；样式 `src/styles/global.css`）
+- `db/` D1 schema + seed；`pages/` 静态报告入口；`output/` 生成产物
+- `openspec/` OpenSpec SDD 变更与规范；`.claude/commands/opsx/` 配套命令
+
+## 开发约定（重要）
+
+- **OpenSpec SDD 驱动**：先在 `openspec/changes/<name>/`（proposal.md / tasks.md / design.md / specs/）立项再写代码。用 `.claude/commands/opsx/*`（new/apply/continue/verify/archive/sync/ff/explore）推进。**优先复用现有信号、阶段、组件模式，不要另起炉灶。**
+- **HeroUI v3 的真实用法**：React 前端（`web/`）**未引入 HeroUI 组件库**（`web/src` 0 处引用），用的是 ECharts + 自定义 CSS（`web/src/styles/global.css`）。HeroUI v3 仅作为**设计 token**（配色等）出现在 `analyzer/renderer.py` 的静态 HTML 报告中。**若确需用 HeroUI 组件，务必先查文末文档块指向的 `./.heroui-docs/react` demos，不要凭记忆。**
+- **数据口径**：`PE = 复权 Close ÷ Σ最近4季复权 EPS`；EPS 优先 diluted、缺失回退 basic；TTM EPS ≤ 0 不入分位（UI 灰显）。
+- **历史复盘防未来函数**：as-of 模式必须以 as-of 日期截断，日线 / 指数环境 / 成交密集区 / quote 都要截断或显式标注不可用，**严防未来数据泄漏**。前瞻标签（后 5/10/20 日涨跌幅、最大涨幅/回撤）只用于证伪展示，**不得反向影响 as-of 的信号/阶段/文案计算**。
+- **语义红线**：总确认度 = **结构强度**，不代表胜率 / 概率 / 准确率；左侧 = 准备度、右侧 = 触发度。文案勿用"胜率/概率/准确率"措辞。
+- **数据源**：`global-stock-data` skill（雅虎 / 东财 / 新浪 / 腾讯 / SEC EDGAR，5 个零密钥 HTTP 源）。测试环境下被 `tests/conftest.py` stub，必须显式 monkeypatch，禁止真实网络。
+
+## 常用命令
+
+**Pipeline**（除注明外在 repo 根目录执行；本机需 Python 3.11+）
+
+```bash
+pip install -r pipeline/requirements-dev.txt      # 安装依赖（含 pytest/responses）
+python -m pytest pipeline                          # 全量测试（含 analyzer 内联测试，~236 用例）
+D1_DRY_RUN=1 python pipeline/run.py --ticker AAPL  # 离线回填 dry-run（只打印 SQL，不写 D1；亦可 --dry-run）
+cd pipeline && python analyze.py AAPL --output-dir <dir>   # 生成单票静态 HTML 报告
+python -m pipeline.server                          # 本地 API，默认 127.0.0.1:8765，demo: /api/signal-report/DEMO?demo=1
+```
+
+**API**（`api/`）：`npm run dev`(wrangler dev :8787) · `npm test`(vitest) · `npm run typecheck` · `npm run deploy`
+
+**Web**（`web/`）：`npm run dev`(:5173) · `npm run build`(tsc -b + vite) · `npm run typecheck`
+
+## 交付约定
+
+完成任务先跑对应校验（Python: `python -m pytest pipeline`；TS: `vitest` + `typecheck`；前端: `build`/`typecheck`），通过后转 `in_review` 交 @Reviewer。关键决策同步进 OpenSpec 变更与提交说明。
 
 
 <!-- HEROUI-REACT-AGENTS-MD-START -->

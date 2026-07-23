@@ -1,0 +1,12 @@
+{
+  "name": "aper-pages",
+  "version": "0.4.0",
+  "description": "当用户需要把对话中的分析结论、设计方案、数据看板、工具页面等内容生成为可访问的 HTML 页面，并发布到 Aone Pages 静态站点（<site-name>.io.alibaba-inc.com）时使用。内置常用类型：分析报告(report)、技术方案(spec)、项目复盘(review)、数据看板(dashboard)、一次性工具页面(tool)、方案对比展示(showcase)；也支持任意 kebab-case 自定义类型（如 changelog / architecture / runbook 等），category 与 template 解耦，template 数量也开放（`aper-pages template list` 查看当前可用模板）。本地 ~/.aper-pages 是一个 git 工作区，aper-pages CLI 会自动完成首次初始化（创建仓库 + CI 流水线），后续 publish 子命令把 HTML 写入本地、push 到远端、手动触发 a1 ci pipeline run 部署，并向所有镜像 fan-out。当用户提到「生成报告」「做个页面」「可视化」「出个看板」「发布 pages」「做个工具页面」「方案对比」「HTML 输出」「aper pages」「pages」时触发。",
+  "publishConfig": {
+    "registry": "https://contextlab.alibaba-inc.com/skill"
+  },
+  "changelog": "添加评论回复说明",
+  "aoneKit": {
+    "generated": true
+  }
+}
