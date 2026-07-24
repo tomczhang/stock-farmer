@@ -105,6 +105,40 @@ CREATE TABLE IF NOT EXISTS quote_cache (
   fetched_at TEXT NOT NULL,
   PRIMARY KEY (symbol, market)
 );
+
+CREATE TABLE IF NOT EXISTS trades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  broker TEXT NOT NULL,
+  market TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  name TEXT NOT NULL,
+  side TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  price REAL NOT NULL,
+  fee REAL NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id, symbol, trade_date);
+
+CREATE TABLE IF NOT EXISTS symbol_buckets (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  symbol TEXT NOT NULL,
+  bucket TEXT NOT NULL,
+  PRIMARY KEY (user_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS cost_overrides (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  broker TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  cost_basis REAL NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, broker, symbol)
+);
 `;
 
 export type AppDatabase = Database.Database;

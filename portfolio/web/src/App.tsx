@@ -12,7 +12,7 @@ import { api } from "./api";
 import type { Me } from "./types";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
-import StatementsPage from "./pages/StatementsPage";
+import HoldingsPage from "./pages/HoldingsPage";
 import PlansPage from "./pages/PlansPage";
 
 interface AuthState {
@@ -82,7 +82,7 @@ function Layout() {
             <NavLink to="/" end>
               资产盘点
             </NavLink>
-            <NavLink to="/statements">月结单</NavLink>
+            <NavLink to="/holdings">持仓明细</NavLink>
             <NavLink to="/plans">加仓计划</NavLink>
           </nav>
           <div className="user">
@@ -113,7 +113,8 @@ const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { index: true, element: <DashboardPage /> },
-      { path: "statements", element: <StatementsPage /> },
+      { path: "holdings", element: <HoldingsPage /> },
+      { path: "statements", element: <Navigate to="/holdings" replace /> },
       { path: "plans", element: <PlansPage /> },
     ],
   },

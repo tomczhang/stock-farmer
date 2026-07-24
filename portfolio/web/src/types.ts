@@ -24,7 +24,11 @@ export interface SummaryPosition {
   quantity: number;
   asOf: string;
   marketValue: number;
+  currentPrice: number | null;
   quoteApplied: boolean;
+  bucket: string;
+  effectiveCost: number | null;
+  costSource: "manual" | "trades" | "statement" | "none";
   valueDisplay: number;
   costDisplay: number | null;
   gainLossDisplay: number | null;
@@ -44,25 +48,62 @@ export interface NamedValue {
   value: number;
 }
 
+export interface HistoryPoint {
+  month: string;
+  valueDisplay: number;
+  costDisplay: number;
+  gainLossDisplay: number;
+  symbolCount: number;
+}
+
 export interface Summary {
   display: Currency;
   asOf: Array<{ broker: string; asOf: string }>;
   kpi: {
     totalAssets: number;
     positionsValue: number;
+    totalCost: number;
+    gainLoss: number;
+    gainLossRatio: number | null;
     idleCash: number;
     positionRatio: number;
   };
   allocation: {
     positionVsCash: NamedValue[];
-    byBroker: NamedValue[];
-    byCurrency: NamedValue[];
+    bySymbol: NamedValue[];
+    byBucket: NamedValue[];
     byMarket: NamedValue[];
   };
   positions: SummaryPosition[];
   cash: SummaryCash[];
   radar: NamedValue[];
+  history: HistoryPoint[];
   staleQuotes: string[];
+}
+
+export type Bucket = "aggressive" | "defensive" | "stable";
+
+export const BUCKET_LABELS: Record<string, string> = {
+  aggressive: "进取仓",
+  defensive: "防守仓",
+  stable: "稳健仓",
+  unassigned: "未分类",
+};
+
+export interface TradeRow {
+  id: number;
+  broker: string;
+  market: string;
+  currency: Currency;
+  symbol: string;
+  name: string;
+  side: "buy" | "sell";
+  tradeDate: string;
+  quantity: number;
+  price: number;
+  fee: number;
+  source: string;
+  createdAt: string;
 }
 
 export interface PlanTier {

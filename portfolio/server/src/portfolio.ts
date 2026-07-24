@@ -1,5 +1,5 @@
 import type { AppDatabase } from "./db.js";
-import type { CashBalanceInput, Currency, PositionInput, StatementPayload } from "./types.js";
+import type { Bucket, CashBalanceInput, Currency, PositionInput, StatementPayload, TradeInput } from "./types.js";
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -9,6 +9,13 @@ export class ValidationError extends Error {
 }
 
 const CURRENCIES: Currency[] = ["USD", "HKD", "CNY"];
+const BUCKETS: Bucket[] = ["aggressive", "defensive", "stable"];
+export const BUCKET_LABELS: Record<string, string> = {
+  aggressive: "进取仓",
+  defensive: "防守仓",
+  stable: "稳健仓",
+  unassigned: "未分类",
+};
 
 function asCurrency(value: unknown): Currency {
   const text = String(value ?? "").toUpperCase();
@@ -37,6 +44,26 @@ function validatePayload(payload: StatementPayload) {
   for (const c of payload.cashBalances) {
     if (!Number.isFinite(c.amount)) throw new ValidationError("现金金额非法");
   }
+}
+
+function validateTrade(trade: TradeInput) {
+  if (!trade.symbol?.trim()) throw new ValidationError("交易缺少标的代码");
+  if (!["buy", "sell"].includes(trade.side)) throw new ValidationError("交易方向非法");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trade.tradeDate ?? "")) throw new ValidationError("交易日期需为 YYYY-MM-DD");
+  if (!(trade.quantity > 0)) throw new ValidationError("交易数量需大于 0");
+  if (!(trade.price > 0)) throw new ValidationError("成交价需大于 0");
+  if (trade.fee != null && trade.fee < 0) throw new ValidationError("手续费不能为负");
+}
+
+interface TradeAgg {
+  netCost: number; // 买入净额 − 卖出净额（含手续费，可为负 = 已回本）
+  netQty: number;
+  lastPrice: number;
+  lastDate: string;
+  broker: string;
+  market: string;
+  currency: string;
+  name: string;
 }
 
 export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, number>) {
@@ -124,7 +151,6 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
       );
     }
 
-    // 现金：parsed 取每券商最新 as_of；manual 直接按 broker+currency 最新一条覆盖
     const cashMap = new Map<string, { broker: string; currency: string; amount: number; source: string; as_of: string }>();
     for (const b of brokers) {
       const rows = db
@@ -144,6 +170,107 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
     for (const row of manualRows) cashMap.set(`${row.broker}|${row.currency}`, row);
 
     return { brokers, positions, cash: Array.from(cashMap.values()) };
+  }
+
+  /** 交易流水按 broker+symbol 聚合净成本/净数量。 */
+  function tradeAggregates(userId: number): Map<string, TradeAgg> {
+    const rows = db
+      .prepare("SELECT * FROM trades WHERE user_id = ? ORDER BY trade_date, id")
+      .all(userId) as Array<{
+      broker: string;
+      market: string;
+      currency: string;
+      symbol: string;
+      name: string;
+      side: string;
+      trade_date: string;
+      quantity: number;
+      price: number;
+      fee: number;
+    }>;
+    const map = new Map<string, TradeAgg>();
+    for (const t of rows) {
+      const key = `${t.broker}|${t.symbol}`;
+      const agg = map.get(key) ?? {
+        netCost: 0,
+        netQty: 0,
+        lastPrice: t.price,
+        lastDate: t.trade_date,
+        broker: t.broker,
+        market: t.market,
+        currency: t.currency,
+        name: t.name,
+      };
+      if (t.side === "buy") {
+        agg.netCost += t.quantity * t.price + t.fee;
+        agg.netQty += t.quantity;
+      } else {
+        agg.netCost -= t.quantity * t.price - t.fee;
+        agg.netQty -= t.quantity;
+      }
+      agg.lastPrice = t.price;
+      agg.lastDate = t.trade_date;
+      map.set(key, agg);
+    }
+    return map;
+  }
+
+  function bucketMap(userId: number): Map<string, string> {
+    const rows = db.prepare("SELECT symbol, bucket FROM symbol_buckets WHERE user_id = ?").all(userId) as Array<{
+      symbol: string;
+      bucket: string;
+    }>;
+    return new Map(rows.map((r) => [r.symbol, r.bucket]));
+  }
+
+  function overrideMap(userId: number): Map<string, number> {
+    const rows = db
+      .prepare("SELECT broker, symbol, cost_basis FROM cost_overrides WHERE user_id = ?")
+      .all(userId) as Array<{ broker: string; symbol: string; cost_basis: number }>;
+    return new Map(rows.map((r) => [`${r.broker}|${r.symbol}`, r.cost_basis]));
+  }
+
+  /** 近 1 年按月聚合：每月每券商取当月最新快照，汇总市值/成本/标的数（USD 口径）。 */
+  function history(userId: number) {
+    const rows = db
+      .prepare(
+        `SELECT p.* FROM positions p
+         WHERE p.user_id = ? AND p.as_of >= date('now', '-1 year', 'start of month')`,
+      )
+      .all(userId) as Array<{
+      broker: string;
+      currency: string;
+      as_of: string;
+      market_value: number;
+      cost_basis: number | null;
+      symbol: string;
+    }>;
+    // 每月每券商最新 as_of
+    const latestPerBrokerMonth = new Map<string, string>();
+    for (const row of rows) {
+      const key = `${row.as_of.slice(0, 7)}|${row.broker}`;
+      const current = latestPerBrokerMonth.get(key);
+      if (!current || row.as_of > current) latestPerBrokerMonth.set(key, row.as_of);
+    }
+    const byMonth = new Map<string, { valueUsd: number; costUsd: number; symbols: Set<string> }>();
+    for (const row of rows) {
+      const month = row.as_of.slice(0, 7);
+      if (latestPerBrokerMonth.get(`${month}|${row.broker}`) !== row.as_of) continue;
+      const entry = byMonth.get(month) ?? { valueUsd: 0, costUsd: 0, symbols: new Set<string>() };
+      entry.valueUsd += toUsd(row.market_value, row.currency);
+      if (row.cost_basis != null) entry.costUsd += toUsd(row.cost_basis, row.currency);
+      entry.symbols.add(row.symbol);
+      byMonth.set(month, entry);
+    }
+    return Array.from(byMonth.entries())
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([month, e]) => ({
+        month,
+        valueUsd: e.valueUsd,
+        costUsd: e.costUsd,
+        gainLossUsd: e.valueUsd - e.costUsd,
+        symbolCount: e.symbols.size,
+      }));
   }
 
   return {
@@ -180,6 +307,70 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
       ).run(userId, asOf, cash.broker, asCurrency(cash.currency), cash.amount);
     },
 
+    addTrade(userId: number, trade: TradeInput) {
+      validateTrade(trade);
+      const result = db
+        .prepare(
+          `INSERT INTO trades (user_id, broker, market, currency, symbol, name, side, trade_date, quantity, price, fee)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          userId,
+          trade.broker?.trim() || "manual",
+          normalizeMarket(trade.market),
+          asCurrency(trade.currency),
+          trade.symbol.trim().toUpperCase(),
+          trade.name?.trim() || trade.symbol.trim().toUpperCase(),
+          trade.side,
+          trade.tradeDate,
+          trade.quantity,
+          trade.price,
+          trade.fee ?? 0,
+        );
+      return Number(result.lastInsertRowid);
+    },
+
+    listTrades(userId: number) {
+      return db
+        .prepare(
+          `SELECT id, broker, market, currency, symbol, name, side, trade_date AS tradeDate,
+                  quantity, price, fee, source, created_at AS createdAt
+           FROM trades WHERE user_id = ? ORDER BY trade_date DESC, id DESC`,
+        )
+        .all(userId);
+    },
+
+    deleteTrade(userId: number, tradeId: number) {
+      return db.prepare("DELETE FROM trades WHERE id = ? AND user_id = ?").run(tradeId, userId).changes > 0;
+    },
+
+    setBucket(userId: number, symbol: string, bucket: Bucket | null) {
+      const sym = String(symbol ?? "").trim().toUpperCase();
+      if (!sym) throw new ValidationError("缺少标的代码");
+      if (bucket === null) {
+        db.prepare("DELETE FROM symbol_buckets WHERE user_id = ? AND symbol = ?").run(userId, sym);
+        return;
+      }
+      if (!BUCKETS.includes(bucket)) throw new ValidationError("仓别非法（aggressive/defensive/stable）");
+      db.prepare(
+        "INSERT INTO symbol_buckets (user_id, symbol, bucket) VALUES (?, ?, ?) ON CONFLICT(user_id, symbol) DO UPDATE SET bucket = excluded.bucket",
+      ).run(userId, sym, bucket);
+    },
+
+    setCostOverride(userId: number, broker: string, symbol: string, costBasis: number | null) {
+      const sym = String(symbol ?? "").trim().toUpperCase();
+      if (!broker?.trim() || !sym) throw new ValidationError("缺少券商或标的");
+      if (costBasis === null) {
+        db.prepare("DELETE FROM cost_overrides WHERE user_id = ? AND broker = ? AND symbol = ?").run(userId, broker, sym);
+        return;
+      }
+      if (!Number.isFinite(costBasis)) throw new ValidationError("成本非法");
+      db.prepare(
+        `INSERT INTO cost_overrides (user_id, broker, symbol, cost_basis) VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, broker, symbol) DO UPDATE SET cost_basis = excluded.cost_basis, updated_at = datetime('now')`,
+      ).run(userId, broker, sym, costBasis);
+    },
+
     /** 闲置现金合计（USD 口径），供加仓计划校验用。 */
     idleCashUsd(userId: number) {
       const { cash } = latestHoldings(userId);
@@ -188,10 +379,32 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
 
     summary(userId: number, display: Currency, quotes?: Map<string, number>) {
       const { brokers, positions, cash } = latestHoldings(userId);
+      const trades = tradeAggregates(userId);
+      const buckets = bucketMap(userId);
+      const overrides = overrideMap(userId);
       const cvt = (amountUsd: number) => fromUsd(amountUsd, display);
 
-      let staleQuotes: string[] = [];
-      const positionRows = positions.map((p) => {
+      const staleQuotes: string[] = [];
+      const seenKeys = new Set(positions.map((p) => `${p.broker}|${p.symbol}`));
+
+      // 纯手动交易建立的持仓（快照中不存在且净数量 > 0）
+      const synthetic = Array.from(trades.entries())
+        .filter(([key, agg]) => !seenKeys.has(key) && agg.netQty > 0.000001)
+        .map(([key, agg]) => ({
+          broker: agg.broker,
+          market: agg.market,
+          currency: agg.currency,
+          symbol: key.split("|")[1],
+          name: agg.name,
+          quantity: agg.netQty,
+          market_value: agg.netQty * agg.lastPrice,
+          cost_basis: agg.netCost,
+          unrealized_gl: null as number | null,
+          as_of: agg.lastDate,
+        }));
+
+      const positionRows = [...positions, ...synthetic].map((p) => {
+        const key = `${p.broker}|${p.symbol}`;
         let marketValue = p.market_value;
         let quoteApplied = false;
         const quote = quotes?.get(`${p.market}:${p.symbol}`);
@@ -201,8 +414,13 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
         } else if (quotes) {
           staleQuotes.push(p.symbol);
         }
+        // 实际成本优先级：手动编辑 > 交易流水净成本 > 月结单成本
+        const tradeAgg = trades.get(key);
+        const effectiveCost = overrides.get(key) ?? tradeAgg?.netCost ?? p.cost_basis ?? null;
+        const costSource = overrides.has(key) ? "manual" : tradeAgg ? "trades" : p.cost_basis != null ? "statement" : "none";
+        const currentPrice = quoteApplied ? quote! : p.quantity > 0 ? marketValue / p.quantity : null;
         const valueUsd = toUsd(marketValue, p.currency);
-        const costUsd = p.cost_basis != null ? toUsd(p.cost_basis, p.currency) : null;
+        const costUsd = effectiveCost != null ? toUsd(effectiveCost, p.currency) : null;
         return {
           broker: p.broker,
           market: p.market,
@@ -212,7 +430,11 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
           quantity: p.quantity,
           asOf: p.as_of,
           marketValue,
+          currentPrice,
           quoteApplied,
+          bucket: buckets.get(p.symbol) ?? "unassigned",
+          effectiveCost,
+          costSource,
           valueDisplay: cvt(valueUsd),
           costDisplay: costUsd != null ? cvt(costUsd) : null,
           gainLossDisplay: costUsd != null ? cvt(valueUsd - costUsd) : null,
@@ -223,8 +445,13 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
         (sum, p) => sum + toUsd(p.marketValue, p.currency),
         0,
       );
+      const totalCostUsd = positionRows.reduce(
+        (sum, p) => sum + (p.effectiveCost != null ? toUsd(p.effectiveCost, p.currency) : 0),
+        0,
+      );
       const cashUsd = cash.reduce((sum, c) => sum + toUsd(c.amount, c.currency), 0);
       const totalUsd = positionsValueUsd + cashUsd;
+      const gainLossUsd = positionsValueUsd - totalCostUsd;
 
       const groupBy = (key: (p: (typeof positionRows)[number]) => string) => {
         const map = new Map<string, number>();
@@ -236,25 +463,16 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
           .sort((a, b) => b.value - a.value);
       };
 
-      // 券商分布把现金也计入（资产视角）
-      const brokerDist = new Map<string, number>();
-      for (const p of positionRows) {
-        brokerDist.set(p.broker, (brokerDist.get(p.broker) ?? 0) + p.valueDisplay);
-      }
-      for (const c of cash) {
-        brokerDist.set(c.broker, (brokerDist.get(c.broker) ?? 0) + cvt(toUsd(c.amount, c.currency)));
-      }
-
-      // 雷达五维（0-100，结构描述）：现金充足度 / 个股分散度 / 市场分散度 / 券商分散度 / 盈亏健康度
+      // 雷达五维（0-100，结构描述）
       const cashRatio = totalUsd > 0 ? cashUsd / totalUsd : 0;
       const topShare =
         positionsValueUsd > 0
-          ? Math.max(...positionRows.map((p) => toUsd(p.marketValue, p.currency))) / positionsValueUsd
+          ? Math.max(...positionRows.map((p) => toUsd(p.marketValue, p.currency)), 0) / positionsValueUsd
           : 0;
       const marketsCount = new Set(positionRows.map((p) => p.market)).size;
       const brokersCount = new Set([...positionRows.map((p) => p.broker), ...cash.map((c) => c.broker)]).size;
       const withCost = positionRows.filter((p) => p.costDisplay != null && p.costDisplay > 0);
-      const gainRatio =
+      const gainRatioHealthy =
         withCost.length > 0
           ? withCost.filter((p) => (p.gainLossDisplay ?? 0) >= 0).length / withCost.length
           : 0.5;
@@ -263,8 +481,16 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
         { name: "个股分散度", value: Math.round((1 - topShare) * 100) },
         { name: "市场分散度", value: Math.round(Math.min(marketsCount / 3, 1) * 100) },
         { name: "券商分散度", value: Math.round(Math.min(brokersCount / 3, 1) * 100) },
-        { name: "盈亏健康度", value: Math.round(gainRatio * 100) },
+        { name: "盈亏健康度", value: Math.round(gainRatioHealthy * 100) },
       ];
+
+      const historyRows = history(userId).map((h) => ({
+        month: h.month,
+        valueDisplay: Math.round(cvt(h.valueUsd) * 100) / 100,
+        costDisplay: Math.round(cvt(h.costUsd) * 100) / 100,
+        gainLossDisplay: Math.round(cvt(h.gainLossUsd) * 100) / 100,
+        symbolCount: h.symbolCount,
+      }));
 
       return {
         display,
@@ -272,6 +498,9 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
         kpi: {
           totalAssets: cvt(totalUsd),
           positionsValue: cvt(positionsValueUsd),
+          totalCost: cvt(totalCostUsd),
+          gainLoss: cvt(gainLossUsd),
+          gainLossRatio: totalCostUsd > 0 ? gainLossUsd / totalCostUsd : null,
           idleCash: cvt(cashUsd),
           positionRatio: totalUsd > 0 ? positionsValueUsd / totalUsd : 0,
         },
@@ -280,10 +509,8 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
             { name: "持仓", value: Math.round(cvt(positionsValueUsd) * 100) / 100 },
             { name: "现金", value: Math.round(cvt(cashUsd) * 100) / 100 },
           ],
-          byBroker: Array.from(brokerDist.entries())
-            .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
-            .sort((a, b) => b.value - a.value),
-          byCurrency: groupBy((p) => p.currency),
+          bySymbol: groupBy((p) => p.symbol),
+          byBucket: groupBy((p) => BUCKET_LABELS[p.bucket] ?? p.bucket),
           byMarket: groupBy((p) => p.market),
         },
         positions: positionRows.sort((a, b) => b.valueDisplay - a.valueDisplay),
@@ -296,6 +523,7 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
           amountDisplay: cvt(toUsd(c.amount, c.currency)),
         })),
         radar,
+        history: historyRows,
         staleQuotes,
       };
     },

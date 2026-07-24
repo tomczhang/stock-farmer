@@ -32,6 +32,21 @@ export interface StatementPayload {
 export type TierTriggerType = "pct_drop" | "price";
 export type TierAllocType = "pct" | "amount";
 
+export type Bucket = "aggressive" | "defensive" | "stable";
+
+export interface TradeInput {
+  broker: string;
+  market: string;
+  currency: Currency;
+  symbol: string;
+  name?: string;
+  side: "buy" | "sell";
+  tradeDate: string; // YYYY-MM-DD
+  quantity: number;
+  price: number;
+  fee?: number;
+}
+
 export interface PlanTierInput {
   seq: number;
   triggerType: TierTriggerType;

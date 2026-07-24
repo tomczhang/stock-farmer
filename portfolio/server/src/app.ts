@@ -7,7 +7,7 @@ import type { Mailer } from "./mailer.js";
 import { createPlanService } from "./plans.js";
 import { createPortfolioService, ValidationError } from "./portfolio.js";
 import { createQuoteService, type QuoteFetcher } from "./quotes.js";
-import type { CashBalanceInput, Currency, PlanInput, StatementPayload } from "./types.js";
+import type { Bucket, CashBalanceInput, Currency, PlanInput, StatementPayload, TradeInput } from "./types.js";
 
 const SESSION_COOKIE = "sf_session";
 
@@ -112,6 +112,38 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
   app.put("/api/cash", async (c) => {
     const body = (await c.req.json()) as CashBalanceInput & { asOf?: string };
     portfolio.upsertManualCash(c.get("userId"), body);
+    return c.json({ ok: true });
+  });
+
+  // ---------- trades（手动录入交易） ----------
+  app.get("/api/trades", (c) => c.json(portfolio.listTrades(c.get("userId"))));
+
+  app.post("/api/trades", async (c) => {
+    const trade = (await c.req.json()) as TradeInput;
+    const id = portfolio.addTrade(c.get("userId"), trade);
+    return c.json({ ok: true, id }, 201);
+  });
+
+  app.delete("/api/trades/:id", (c) => {
+    const ok = portfolio.deleteTrade(c.get("userId"), Number(c.req.param("id")));
+    return ok ? c.json({ ok: true }) : c.json({ error: "交易不存在" }, 404);
+  });
+
+  // ---------- 仓别标注 ----------
+  app.put("/api/buckets", async (c) => {
+    const { symbol, bucket } = (await c.req.json()) as { symbol: string; bucket: Bucket | null };
+    portfolio.setBucket(c.get("userId"), symbol, bucket ?? null);
+    return c.json({ ok: true });
+  });
+
+  // ---------- 成本编辑 ----------
+  app.put("/api/positions/cost", async (c) => {
+    const { broker, symbol, costBasis } = (await c.req.json()) as {
+      broker: string;
+      symbol: string;
+      costBasis: number | null;
+    };
+    portfolio.setCostOverride(c.get("userId"), broker, symbol, costBasis ?? null);
     return c.json({ ok: true });
   });
 
