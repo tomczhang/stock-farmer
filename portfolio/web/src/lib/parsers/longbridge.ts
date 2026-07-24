@@ -1,0 +1,3168 @@
+// @ts-nocheck -- vendored from tax-check (esbuild-only upstream, not strict-tsc clean); keep logic unmodified.
+import * as XLSX from "xlsx";
+import { emptyParsedInput } from "@/lib/tax/calculator";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
+import type {
+  CostBasisRequest,
+  Currency,
+  DividendIncome,
+  OpenPosition,
+  ParsedInput,
+  RealizedTrade,
+  ReviewIssue,
+  TradeActivity,
+} from "@/lib/tax/types";
+
+interface LongbridgeFileInput {
+  name: string;
+  data: ArrayBuffer;
+}
+
+interface TextToken {
+  text: string;
+  x: number;
+  y: number;
+}
+
+interface TextBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageWidth: number;
+  pageHeight: number;
+}
+
+interface TextLine {
+  page: number;
+  text: string;
+  tokens: TextToken[];
+  bounds: TextBounds;
+}
+
+interface PdfTextItemLike {
+  str?: unknown;
+  transform?: unknown;
+}
+
+interface StockTradeRecord {
+  sourcePdf: string;
+  page: number;
+  market: string;
+  currency: Currency;
+  tradeDate: string;
+  settleDate: string;
+  orderId: string;
+  side: string;
+  code: string;
+  name: string;
+  quantity: number;
+  avgPrice: number;
+  tradeAmount: number;
+  cashChange: number;
+  sequence: number;
+  tradeTime?: string;
+  codeResolution: "explicit" | "known_alias" | "name_fallback";
+}
+
+interface StockTradeFields {
+  tradeDate: string;
+  settleDate: string;
+  orderId: string;
+  side: string;
+  item: string;
+  quantity: string;
+  avgPrice: string;
+  tradeAmount: string;
+  cashChange: string;
+}
+
+interface PortfolioFields {
+  item: string;
+  beginQty: string;
+  changeQty: string;
+  endQty: string;
+  price: string;
+  marketValue: string;
+  avgCost: string;
+  unrealizedGainLoss: string;
+}
+
+interface CashFlowRecord {
+  sourcePdf: string;
+  page: number;
+  currency: Currency;
+  date: string;
+  flowType: string;
+  note: string;
+  amount: number;
+  evidence?: {
+    page: number;
+    text: string;
+    imageDataUrl?: string;
+    bounds: TextBounds;
+  };
+}
+
+interface PositionMoveRecord {
+  sourcePdf: string;
+  page: number;
+  market: string;
+  date: string;
+  moveType: string;
+  code: string;
+  name: string;
+  note: string;
+  quantity: number;
+}
+
+interface PositionMoveFields {
+  date: string;
+  moveType: string;
+  item: string;
+  note: string;
+  quantity: string;
+}
+
+interface PortfolioRecord {
+  sourcePdf: string;
+  page: number;
+  statementMonth?: string;
+  market: string;
+  currency: Currency;
+  code: string;
+  name: string;
+  beginQty: number;
+  changeQty: number;
+  endQty: number;
+  price: number;
+  marketValue: number;
+  avgCost: number;
+  unrealizedGainLoss: number;
+}
+
+interface LongbridgeRawData {
+  trades: StockTradeRecord[];
+  cashFlows: CashFlowRecord[];
+  moves: PositionMoveRecord[];
+  positions: PortfolioRecord[];
+  issues: ReviewIssue[];
+  statementDetected: boolean;
+}
+
+interface LongbridgeWorkbookData {
+  activities: TradeActivity[];
+  issues: ReviewIssue[];
+  statementDetected: boolean;
+}
+
+export interface ManualCostInput {
+  id: string;
+  costBasis: number;
+}
+
+export interface ManualSecurityAliasInput {
+  name: string;
+  symbol: string;
+  market?: string;
+  currency?: Currency;
+}
+
+interface MissingCostAggregate {
+  id: string;
+  broker: string;
+  sellDate: string;
+  market: string;
+  currency: Currency;
+  symbol: string;
+  securityName: string;
+  quantity: number;
+  proceeds: number;
+  trackedQuantity: number;
+  source: string;
+  note: string;
+  sales: MissingCostSale[];
+}
+
+interface MissingCostSale {
+  date: string;
+  time: string;
+  sequence: number;
+  market: string;
+  currency: Currency;
+  symbol: string;
+  securityName: string;
+  quantity: number;
+  proceeds: number;
+  source: string;
+  note: string;
+}
+
+interface PositionState {
+  market: string;
+  currency: Currency;
+  name: string;
+  quantity: number;
+  costBasis: number;
+}
+
+interface SecurityAlias {
+  code: string;
+  name: string;
+  market?: string;
+  currency?: Currency;
+}
+
+type EventRecord =
+  | {
+      kind: "acquire" | "transfer_in";
+      date: string;
+      rank: number;
+      sequence: number;
+      market: string;
+      currency: Currency;
+      code: string;
+      name: string;
+      quantity: number;
+      cost: number;
+      source: string;
+      note: string;
+    }
+  | {
+      kind: "buy" | "sell";
+      date: string;
+      rank: number;
+      sequence: number;
+      time: string;
+      market: string;
+      currency: Currency;
+      code: string;
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      grossAmount: number;
+      fee: number;
+      cash: number;
+      source: string;
+      note: string;
+    }
+  | {
+      kind: "transfer_out";
+      date: string;
+      rank: number;
+      sequence: number;
+      market: string;
+      currency: Currency;
+      code: string;
+      name: string;
+      quantity: number;
+      source: string;
+      note: string;
+    }
+  | {
+      kind: "stock_split";
+      date: string;
+      rank: number;
+      sequence: number;
+      market: string;
+      currency: Currency;
+      code: string;
+      name: string;
+      quantity: number;
+      splitRatio: number;
+      splitFromQuantity: number;
+      splitToQuantity: number;
+      cashInLieu?: number;
+      source: string;
+      note: string;
+    };
+
+const DATE_RE = /^20\d{2}\.\d{2}\.\d{2}$/;
+const ORDER_TIME_OVERRIDE: Record<string, string> = {
+  OS20251230158712: "14:03:15",
+  OS20251230175778: "14:03:51",
+  OS20251230163762: "14:07:30",
+  OS20251230161719: "14:08:18",
+  OS20251230176385: "14:13:50",
+  OS20251230173008: "14:14:02",
+};
+
+const KNOWN_SECURITY_ALIASES: Record<string, SecurityAlias> = {
+  "advanced micro devices": { code: "AMD", name: "AMD", market: "美国市场", currency: "USD" },
+  amd: { code: "AMD", name: "AMD", market: "美国市场", currency: "USD" },
+  "archer aviation": { code: "ACHR", name: "Archer Aviation", market: "美国市场", currency: "USD" },
+  "blade air mobility": { code: "BLDE", name: "Blade Air Mobility", market: "美国市场", currency: "USD" },
+  broadcom: { code: "AVGO", name: "Broadcom", market: "美国市场", currency: "USD" },
+  "broadcom inc": { code: "AVGO", name: "Broadcom", market: "美国市场", currency: "USD" },
+  celsius: { code: "CELH", name: "Celsius", market: "美国市场", currency: "USD" },
+  circle: { code: "CRCL", name: "Circle Internet Group", market: "美国市场", currency: "USD" },
+  "circle internet": { code: "CRCL", name: "Circle Internet Group", market: "美国市场", currency: "USD" },
+  "circle internet group": { code: "CRCL", name: "Circle Internet Group", market: "美国市场", currency: "USD" },
+  "circle internet group inc": { code: "CRCL", name: "Circle Internet Group", market: "美国市场", currency: "USD" },
+  cleanspark: { code: "CLSK", name: "CleanSpark", market: "美国市场", currency: "USD" },
+  coinbase: { code: "COIN", name: "Coinbase", market: "美国市场", currency: "USD" },
+  "coinbase global": { code: "COIN", name: "Coinbase", market: "美国市场", currency: "USD" },
+  "coinbase global inc": { code: "COIN", name: "Coinbase", market: "美国市场", currency: "USD" },
+  coke: { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  "coca cola": { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  "coca-cola": { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  ko: { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  "the coca cola company": { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  "direxion daily msft": { code: "MSFU", name: "Direxion Daily MSFT Bull 2X Shares", market: "美国市场", currency: "USD" },
+  "direxion daily msft bull 2x shares": {
+    code: "MSFU",
+    name: "Direxion Daily MSFT Bull 2X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily meta": { code: "METU", name: "Direxion Daily META Bull 2X ETF", market: "美国市场", currency: "USD" },
+  "direxion daily meta bull 2x etf": {
+    code: "METU",
+    name: "Direxion Daily META Bull 2X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily meta bull 2x shares": {
+    code: "METU",
+    name: "Direxion Daily META Bull 2X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily nvda": { code: "NVDU", name: "Direxion Daily NVDA Bull 2X ETF", market: "美国市场", currency: "USD" },
+  "direxion daily nvda bull 2x etf": {
+    code: "NVDU",
+    name: "Direxion Daily NVDA Bull 2X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily nvda bull 2x shares": {
+    code: "NVDU",
+    name: "Direxion Daily NVDA Bull 2X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily tsla": { code: "TSLL", name: "Direxion Daily TSLA Bull 2X Shares", market: "美国市场", currency: "USD" },
+  "direxion daily tsla bull 2x shares": {
+    code: "TSLL",
+    name: "Direxion Daily TSLA Bull 2X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily semiconductor bull 3x etf": {
+    code: "SOXL",
+    name: "Direxion Daily Semiconductor Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily semiconductor bull 3x shares": {
+    code: "SOXL",
+    name: "Direxion Daily Semiconductor Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily ftse china bull 3x etf": {
+    code: "YINN",
+    name: "Direxion Daily FTSE China Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily ftse china bull 3x shares": {
+    code: "YINN",
+    name: "Direxion Daily FTSE China Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "ftse china bull 3x": { code: "YINN", name: "Direxion Daily FTSE China Bull 3X ETF", market: "美国市场", currency: "USD" },
+  "graniteshares 2x long coin": { code: "CONL", name: "GraniteShares 2x Long COIN Daily ETF", market: "美国市场", currency: "USD" },
+  "graniteshares 2x long coin daily etf": {
+    code: "CONL",
+    name: "GraniteShares 2x Long COIN Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "graniteshares 2x long meta": { code: "FBL", name: "GraniteShares 2x Long META Daily ETF", market: "美国市场", currency: "USD" },
+  "graniteshares 2x long meta daily etf": {
+    code: "FBL",
+    name: "GraniteShares 2x Long META Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "graniteshares 2x long nvda": { code: "NVDL", name: "GraniteShares 2x Long NVDA Daily ETF", market: "美国市场", currency: "USD" },
+  "graniteshares 2x long nvda daily etf": {
+    code: "NVDL",
+    name: "GraniteShares 2x Long NVDA Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "graniteshares 2x long tsla": { code: "TSLR", name: "GraniteShares 2x Long TSLA Daily ETF", market: "美国市场", currency: "USD" },
+  "graniteshares 2x long tsla daily etf": {
+    code: "TSLR",
+    name: "GraniteShares 2x Long TSLA Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "kulr tech": { code: "KULR", name: "KULR Tech", market: "美国市场", currency: "USD" },
+  "eli lilly": { code: "LLY", name: "Eli Lilly", market: "美国市场", currency: "USD" },
+  "eli lilly and company": { code: "LLY", name: "Eli Lilly", market: "美国市场", currency: "USD" },
+  lilly: { code: "LLY", name: "Eli Lilly", market: "美国市场", currency: "USD" },
+  meta: { code: "META", name: "Meta", market: "美国市场", currency: "USD" },
+  "meta platforms": { code: "META", name: "Meta", market: "美国市场", currency: "USD" },
+  merck: { code: "MRK", name: "Merck", market: "美国市场", currency: "USD" },
+  "merck co": { code: "MRK", name: "Merck", market: "美国市场", currency: "USD" },
+  "merck & co": { code: "MRK", name: "Merck", market: "美国市场", currency: "USD" },
+  "merck & co inc": { code: "MRK", name: "Merck", market: "美国市场", currency: "USD" },
+  strategy: { code: "MSTR", name: "Strategy", market: "美国市场", currency: "USD" },
+  microstrategy: { code: "MSTR", name: "MicroStrategy", market: "美国市场", currency: "USD" },
+  "microstrategy inc": { code: "MSTR", name: "MicroStrategy", market: "美国市场", currency: "USD" },
+  microsoft: { code: "MSFT", name: "Microsoft", market: "美国市场", currency: "USD" },
+  "micron tech": { code: "MU", name: "Micron Tech", market: "美国市场", currency: "USD" },
+  nvidia: { code: "NVDA", name: "NVIDIA", market: "美国市场", currency: "USD" },
+  "novo nordisk": { code: "NVO", name: "Novo Nordisk", market: "美国市场", currency: "USD" },
+  "novo nordisk a/s": { code: "NVO", name: "Novo Nordisk", market: "美国市场", currency: "USD" },
+  "novo nordisk adr": { code: "NVO", name: "Novo Nordisk", market: "美国市场", currency: "USD" },
+  tempus: { code: "TEM", name: "Tempus AI", market: "美国市场", currency: "USD" },
+  "tempus ai": { code: "TEM", name: "Tempus AI", market: "美国市场", currency: "USD" },
+  "tempus ai inc": { code: "TEM", name: "Tempus AI", market: "美国市场", currency: "USD" },
+  "lockheed martin": { code: "LMT", name: "Lockheed Martin", market: "美国市场", currency: "USD" },
+  "alphabet a": { code: "GOOGL", name: "谷歌-A", market: "美国市场", currency: "USD" },
+  "alphabet class a": { code: "GOOGL", name: "谷歌-A", market: "美国市场", currency: "USD" },
+  "alphabet inc class a": { code: "GOOGL", name: "谷歌-A", market: "美国市场", currency: "USD" },
+  "alphabet c": { code: "GOOG", name: "谷歌-C", market: "美国市场", currency: "USD" },
+  "alphabet class c": { code: "GOOG", name: "谷歌-C", market: "美国市场", currency: "USD" },
+  "alphabet class c capital stock": { code: "GOOG", name: "谷歌-C", market: "美国市场", currency: "USD" },
+  "alphabet inc class c": { code: "GOOG", name: "谷歌-C", market: "美国市场", currency: "USD" },
+  "boeing": { code: "BA", name: "波音", market: "美国市场", currency: "USD" },
+  "the boeing company": { code: "BA", name: "波音", market: "美国市场", currency: "USD" },
+  intel: { code: "INTC", name: "Intel", market: "美国市场", currency: "USD" },
+  "ak medical": { code: "01789", name: "爱康医疗", market: "香港市场", currency: "HKD" },
+  "ak medical holdings": { code: "01789", name: "爱康医疗", market: "香港市场", currency: "HKD" },
+  "green tea group": { code: "06831", name: "绿茶集团", market: "香港市场", currency: "HKD" },
+  "green tea group limited": { code: "06831", name: "绿茶集团", market: "香港市场", currency: "HKD" },
+  tencent: { code: "00700", name: "腾讯控股", market: "香港市场", currency: "HKD" },
+  "tencent holdings": { code: "00700", name: "腾讯控股", market: "香港市场", currency: "HKD" },
+  xiaomi: { code: "01810", name: "小米集团-W", market: "香港市场", currency: "HKD" },
+  "xiaomi group": { code: "01810", name: "小米集团-W", market: "香港市场", currency: "HKD" },
+  meituan: { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  "meituan w": { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  "meituan dianping": { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  "03690": { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  "3690": { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  英伟达: { code: "NVDA", name: "英伟达", market: "美国市场", currency: "USD" },
+  辉达: { code: "NVDA", name: "英伟达", market: "美国市场", currency: "USD" },
+  "英伟达每日 2 倍做多": { code: "NVDU", name: "Direxion Daily NVDA Bull 2X ETF", market: "美国市场", currency: "USD" },
+  英伟达每日2倍做多: { code: "NVDU", name: "Direxion Daily NVDA Bull 2X ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多英伟达 etf": { code: "NVDU", name: "Direxion Daily NVDA Bull 2X ETF", market: "美国市场", currency: "USD" },
+  "2倍做多英伟达etf": { code: "NVDU", name: "Direxion Daily NVDA Bull 2X ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多 nvda etf": { code: "NVDU", name: "Direxion Daily NVDA Bull 2X ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多英伟达 etf graniteshares": {
+    code: "NVDL",
+    name: "GraniteShares 2x Long NVDA Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "2 倍做多 nvda etf graniteshares": {
+    code: "NVDL",
+    name: "GraniteShares 2x Long NVDA Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  中海物业: { code: "02669", name: "中海物业", market: "香港市场", currency: "HKD" },
+  中国海外物业: { code: "02669", name: "中海物业", market: "香港市场", currency: "HKD" },
+  小米: { code: "01810", name: "小米集团-W", market: "香港市场", currency: "HKD" },
+  小米集团: { code: "01810", name: "小米集团-W", market: "香港市场", currency: "HKD" },
+  "小米集团 w": { code: "01810", name: "小米集团-W", market: "香港市场", currency: "HKD" },
+  美团: { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  "美团 w": { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  美团点评: { code: "03690", name: "美团-W", market: "香港市场", currency: "HKD" },
+  海天味业: { code: "03288", name: "海天味业", market: "香港市场", currency: "HKD" },
+  金斯瑞生物科技: { code: "01548", name: "金斯瑞生物科技", market: "香港市场", currency: "HKD" },
+  恒瑞医药: { code: "01276", name: "恒瑞医药", market: "香港市场", currency: "HKD" },
+  三花智控: { code: "02050", name: "三花智控", market: "香港市场", currency: "HKD" },
+  药明生物: { code: "02269", name: "药明生物", market: "香港市场", currency: "HKD" },
+  藥明生物: { code: "02269", name: "药明生物", market: "香港市场", currency: "HKD" },
+  爱康医疗: { code: "01789", name: "爱康医疗", market: "香港市场", currency: "HKD" },
+  爱康医疗控股: { code: "01789", name: "爱康医疗", market: "香港市场", currency: "HKD" },
+  洛克希德马丁: { code: "LMT", name: "洛克希德马丁", market: "美国市场", currency: "USD" },
+  "洛克希德 马丁": { code: "LMT", name: "洛克希德马丁", market: "美国市场", currency: "USD" },
+  "谷歌 a": { code: "GOOGL", name: "谷歌-A", market: "美国市场", currency: "USD" },
+  "谷歌 class a": { code: "GOOGL", name: "谷歌-A", market: "美国市场", currency: "USD" },
+  "谷歌 c": { code: "GOOG", name: "谷歌-C", market: "美国市场", currency: "USD" },
+  "谷歌 class c": { code: "GOOG", name: "谷歌-C", market: "美国市场", currency: "USD" },
+  波音: { code: "BA", name: "波音", market: "美国市场", currency: "USD" },
+  波音公司: { code: "BA", name: "波音", market: "美国市场", currency: "USD" },
+  阿斯麦: { code: "ASML", name: "阿斯麦", market: "美国市场", currency: "USD" },
+  阿斯麦控股: { code: "ASML", name: "阿斯麦", market: "美国市场", currency: "USD" },
+  英特尔: { code: "INTC", name: "英特尔", market: "美国市场", currency: "USD" },
+  英特尔公司: { code: "INTC", name: "英特尔", market: "美国市场", currency: "USD" },
+  腾讯控股: { code: "00700", name: "腾讯控股", market: "香港市场", currency: "HKD" },
+  拼多多: { code: "PDD", name: "拼多多", market: "美国市场", currency: "USD" },
+  台积电: { code: "TSM", name: "台积电", market: "美国市场", currency: "USD" },
+  阿里巴巴: { code: "BABA", name: "阿里巴巴", market: "美国市场", currency: "USD" },
+  "阿里巴巴 w": { code: "09988", name: "阿里巴巴-W", market: "香港市场", currency: "HKD" },
+  "阿里巴巴 sw": { code: "09988", name: "阿里巴巴-SW", market: "香港市场", currency: "HKD" },
+  联合健康: { code: "UNH", name: "联合健康", market: "美国市场", currency: "USD" },
+  苹果: { code: "AAPL", name: "Apple", market: "美国市场", currency: "USD" },
+  visa: { code: "V", name: "Visa", market: "美国市场", currency: "USD" },
+  微软: { code: "MSFT", name: "Microsoft", market: "美国市场", currency: "USD" },
+  特斯拉: { code: "TSLA", name: "Tesla", market: "美国市场", currency: "USD" },
+  "特斯拉每日 2 倍做多": { code: "TSLL", name: "Direxion Daily TSLA Bull 2X Shares", market: "美国市场", currency: "USD" },
+  特斯拉每日2倍做多: { code: "TSLL", name: "Direxion Daily TSLA Bull 2X Shares", market: "美国市场", currency: "USD" },
+  "2 倍做多特斯拉 etf": { code: "TSLL", name: "Direxion Daily TSLA Bull 2X Shares", market: "美国市场", currency: "USD" },
+  "2倍做多特斯拉etf": { code: "TSLL", name: "Direxion Daily TSLA Bull 2X Shares", market: "美国市场", currency: "USD" },
+  "2 倍做多 tsla etf": { code: "TSLL", name: "Direxion Daily TSLA Bull 2X Shares", market: "美国市场", currency: "USD" },
+  "2 倍做多 tsla etf graniteshares": {
+    code: "TSLR",
+    name: "GraniteShares 2x Long TSLA Daily ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  亚马逊: { code: "AMZN", name: "Amazon", market: "美国市场", currency: "USD" },
+  奈飞: { code: "NFLX", name: "Netflix", market: "美国市场", currency: "USD" },
+  博通: { code: "AVGO", name: "Broadcom", market: "美国市场", currency: "USD" },
+  高通: { code: "QCOM", name: "Qualcomm", market: "美国市场", currency: "USD" },
+  美光: { code: "MU", name: "Micron Tech", market: "美国市场", currency: "USD" },
+  超微电脑: { code: "SMCI", name: "Super Micro Computer", market: "美国市场", currency: "USD" },
+  百度: { code: "BIDU", name: "百度", market: "美国市场", currency: "USD" },
+  京东: { code: "JD", name: "京东", market: "美国市场", currency: "USD" },
+  网易: { code: "NTES", name: "网易", market: "美国市场", currency: "USD" },
+  bili: { code: "BILI", name: "哔哩哔哩", market: "美国市场", currency: "USD" },
+  哔哩哔哩: { code: "BILI", name: "哔哩哔哩", market: "美国市场", currency: "USD" },
+  蔚来: { code: "NIO", name: "蔚来", market: "美国市场", currency: "USD" },
+  小鹏: { code: "XPEV", name: "小鹏", market: "美国市场", currency: "USD" },
+  理想汽车: { code: "LI", name: "理想汽车", market: "美国市场", currency: "USD" },
+  "半导体 3 倍做多": { code: "SOXL", name: "Direxion Daily Semiconductor Bull 3X ETF", market: "美国市场", currency: "USD" },
+  半导体3倍做多: { code: "SOXL", name: "Direxion Daily Semiconductor Bull 3X ETF", market: "美国市场", currency: "USD" },
+  "3 倍做多半导体指数 etf": { code: "SOXL", name: "Direxion Daily Semiconductor Bull 3X ETF", market: "美国市场", currency: "USD" },
+  "3倍做多半导体指数etf": { code: "SOXL", name: "Direxion Daily Semiconductor Bull 3X ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多 coin etf": { code: "CONL", name: "GraniteShares 2x Long COIN Daily ETF", market: "美国市场", currency: "USD" },
+  "2倍做多coinetf": { code: "CONL", name: "GraniteShares 2x Long COIN Daily ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多 coinbase etf": { code: "CONL", name: "GraniteShares 2x Long COIN Daily ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多 meta etf": { code: "FBL", name: "GraniteShares 2x Long META Daily ETF", market: "美国市场", currency: "USD" },
+  "2倍做多metaetf": { code: "FBL", name: "GraniteShares 2x Long META Daily ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多 meta etf graniteshares": { code: "FBL", name: "GraniteShares 2x Long META Daily ETF", market: "美国市场", currency: "USD" },
+  "2 倍做多 meta etf direxion": { code: "METU", name: "Direxion Daily META Bull 2X ETF", market: "美国市场", currency: "USD" },
+  默克: { code: "MRK", name: "Merck", market: "美国市场", currency: "USD" },
+  默沙东: { code: "MRK", name: "Merck", market: "美国市场", currency: "USD" },
+  礼来: { code: "LLY", name: "Eli Lilly", market: "美国市场", currency: "USD" },
+  禮來: { code: "LLY", name: "Eli Lilly", market: "美国市场", currency: "USD" },
+  诺和诺德: { code: "NVO", name: "Novo Nordisk", market: "美国市场", currency: "USD" },
+  诺和诺德公司: { code: "NVO", name: "Novo Nordisk", market: "美国市场", currency: "USD" },
+  諾和諾德: { code: "NVO", name: "Novo Nordisk", market: "美国市场", currency: "USD" },
+  可口可乐: { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  可口可樂: { code: "KO", name: "Coca-Cola", market: "美国市场", currency: "USD" },
+  绿茶集团: { code: "06831", name: "绿茶集团", market: "香港市场", currency: "HKD" },
+  綠茶集團: { code: "06831", name: "绿茶集团", market: "香港市场", currency: "HKD" },
+  "富时中国 3 倍做多 etf": {
+    code: "YINN",
+    name: "Direxion Daily FTSE China Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "富时中国3倍做多etf": {
+    code: "YINN",
+    name: "Direxion Daily FTSE China Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "富时中国三倍做多 etf": {
+    code: "YINN",
+    name: "Direxion Daily FTSE China Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "富时中国三倍做多etf": {
+    code: "YINN",
+    name: "Direxion Daily FTSE China Bull 3X ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "pro ultr cvix shrt": { code: "UVXY", name: "ProShares Ultra VIX Short-Term Futures ETF", market: "美国市场", currency: "USD" },
+  "pro ultr vix shrt": { code: "UVXY", name: "ProShares Ultra VIX Short-Term Futures ETF", market: "美国市场", currency: "USD" },
+  "red cat": { code: "RCAT", name: "Red Cat", market: "美国市场", currency: "USD" },
+  redwire: { code: "RDW", name: "Redwire", market: "美国市场", currency: "USD" },
+  satixfy: { code: "SATX", name: "SatixFy Communications", market: "美国市场", currency: "USD" },
+  "satixfy communications": { code: "SATX", name: "SatixFy Communications", market: "美国市场", currency: "USD" },
+  taiwan: { code: "TSM", name: "Taiwan Semiconductor", market: "美国市场", currency: "USD" },
+  "taiwan semiconductor": { code: "TSM", name: "Taiwan Semiconductor", market: "美国市场", currency: "USD" },
+  "20年期以上美国国债": { code: "TLT", name: "iShares 20+ Year Treasury Bond ETF", market: "美国市场", currency: "USD" },
+  "20 年期以上美国国债": { code: "TLT", name: "iShares 20+ Year Treasury Bond ETF", market: "美国市场", currency: "USD" },
+  "20年期以上美国国债3": {
+    code: "TMF",
+    name: "Direxion Daily 20+ Year Treasury Bull 3X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "20 年期以上美国国债 3": {
+    code: "TMF",
+    name: "Direxion Daily 20+ Year Treasury Bull 3X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "20 年期以上美国国债 3 倍做多 etf": {
+    code: "TMF",
+    name: "Direxion Daily 20+ Year Treasury Bull 3X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "20年期以上美国国债3倍做多etf": {
+    code: "TMF",
+    name: "Direxion Daily 20+ Year Treasury Bull 3X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "20 年期以上美国国债 3 倍做多 etf direxion": {
+    code: "TMF",
+    name: "Direxion Daily 20+ Year Treasury Bull 3X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "direxion daily 20 year treasury bull 3x shares": {
+    code: "TMF",
+    name: "Direxion Daily 20+ Year Treasury Bull 3X Shares",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "20 年期以上美国国债 etf": { code: "TLT", name: "iShares 20+ Year Treasury Bond ETF", market: "美国市场", currency: "USD" },
+  "20 年期以上美国国债 etf ishares": {
+    code: "TLT",
+    name: "iShares 20+ Year Treasury Bond ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "ishares 20 year treasury bond etf": {
+    code: "TLT",
+    name: "iShares 20+ Year Treasury Bond ETF",
+    market: "美国市场",
+    currency: "USD",
+  },
+  "纳指 100 etf": { code: "QQQ", name: "Invesco QQQ Trust", market: "美国市场", currency: "USD" },
+  "纳指 100 etf invesco": { code: "QQQ", name: "Invesco QQQ Trust", market: "美国市场", currency: "USD" },
+  "纳指100etf invesco": { code: "QQQ", name: "Invesco QQQ Trust", market: "美国市场", currency: "USD" },
+  "标普 500 etf spdr": { code: "SPY", name: "SPDR S&P 500 ETF Trust", market: "美国市场", currency: "USD" },
+};
+
+function clean(value: string) {
+  return value.replace(/\p{C}+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+function canonicalText(value: string) {
+  return value
+    .normalize("NFKC")
+    .replace(/\p{C}+/gu, " ")
+    .replaceAll("⻓", "长")
+    .replaceAll("⻢", "马")
+    .replaceAll("⾺", "马")
+    .replaceAll("馬", "马")
+    .replaceAll("⻨", "麦")
+    .replaceAll("⿆", "麦")
+    .replaceAll("麥", "麦")
+    .replaceAll("愛", "爱")
+    .replaceAll("醫", "医")
+    .replaceAll("療", "疗")
+    .replaceAll("騰", "腾")
+    .replaceAll("訊", "讯")
+    .replaceAll("長", "长")
+    .replaceAll("橋", "桥")
+    .replaceAll("證", "证")
+    .replaceAll("綜", "综")
+    .replaceAll("賬", "账")
+    .replaceAll("帳", "账")
+    .replaceAll("戶", "户")
+    .replaceAll("⼾", "户")
+    .replaceAll("結", "结")
+    .replaceAll("單", "单")
+    .replaceAll("總", "总")
+    .replaceAll("覽", "览")
+    .replaceAll("資", "资")
+    .replaceAll("額", "额")
+    .replaceAll("詳", "详")
+    .replaceAll("項", "项")
+    .replaceAll("變", "变")
+    .replaceAll("數", "数")
+    .replaceAll("價", "价")
+    .replaceAll("倉", "仓")
+    .replaceAll("虧", "亏")
+    .replaceAll("維", "维")
+    .replaceAll("貨", "货")
+    .replaceAll("錢", "钱")
+    .replaceAll("編", "编")
+    .replaceAll("號", "号")
+    .replaceAll("買", "买")
+    .replaceAll("賣", "卖")
+    .replaceAll("發", "发")
+    .replaceAll("類", "类")
+    .replaceAll("備", "备")
+    .replaceAll("註", "注")
+    .replaceAll("幣", "币")
+    .replaceAll("種", "种")
+    .replaceAll("場", "场")
+    .replaceAll("國", "国")
+    .replaceAll("紅", "红")
+    .replaceAll("動", "动")
+    .replaceAll("費", "费")
+    .replaceAll("稅", "税")
+    .replaceAll("認", "认")
+    .replaceAll("購", "购")
+    .replaceAll("贖", "赎")
+    .replaceAll("轉", "转")
+    .replaceAll("簽", "签")
+    .replaceAll("籤", "签")
+    .replaceAll("餘", "余")
+    .replaceAll("⽣", "生")
+    .replaceAll("⽇", "日")
+    .replaceAll("⾦", "金")
+    .replaceAll("⾹", "香")
+    .replaceAll("⼊", "入")
+    .replaceAll("⽬", "目")
+    .replaceAll("⼿", "手")
+    .replaceAll("⾏", "行")
+    .replaceAll("⽤", "用");
+}
+
+function isLongbridgeMonthlyStatement(text: string) {
+  const lower = text.toLowerCase();
+  return (
+    text.includes("综合账户月结单") ||
+    text.includes("长桥证券") ||
+    lower.includes("longbridge") ||
+    lower.includes("long bridge") ||
+    lower.includes("lbhk") ||
+    lower.includes("longbridge securities") ||
+    lower.includes("long bridge securities") ||
+    lower.includes("longbridge hk") ||
+    lower.includes("long bridge hk") ||
+    lower.includes("monthly statement/tax invoice")
+  );
+}
+
+function parseNumber(value: string) {
+  const parsed = Number(value.replace(/,/g, "").replace(/[()]/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeDate(value: string) {
+  return value.replace(/\./g, "-");
+}
+
+function displayChineseDate(value: string) {
+  const [year, month, day] = normalizeDate(value).split("-");
+  return year && month && day ? `${year}年${month}月${day}日` : value;
+}
+
+function normalizeCode(value: string) {
+  const text = value.trim().toUpperCase();
+  return /^\d+$/.test(text) ? text.replace(/^0+/, "") || "0" : text;
+}
+
+function displayCode(value: string) {
+  const text = value.trim().toUpperCase();
+  return /^\d+$/.test(text) ? text.padStart(5, "0") : text;
+}
+
+function mapCurrency(value: string): Currency {
+  const text = canonicalText(value).toUpperCase();
+  if (text.includes("美元") || text.includes("USD")) return "USD";
+  if (text.includes("人民币") || text.includes("CNY")) return "CNY";
+  return "HKD";
+}
+
+const STOCK_LEDGER_REQUIRED_HEADERS = ["编号", "业务时间", "账户类型", "业务分类", "股票代码", "账户流向", "数量", "总数量"];
+
+function workbookSourceId(fileName: string, rowNumber: number) {
+  return `${fileName}#row-${rowNumber}`;
+}
+
+function worksheetRows(workbook: XLSX.WorkBook, sheetName: string) {
+  const sheet = workbook.Sheets[sheetName];
+  return XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: false, blankrows: false });
+}
+
+function rowObjects(workbook: XLSX.WorkBook, sheetName: string) {
+  const sheet = workbook.Sheets[sheetName];
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false, blankrows: false });
+}
+
+function findStockLedgerSheetName(workbook: XLSX.WorkBook) {
+  for (const sheetName of workbook.SheetNames) {
+    const rows = worksheetRows(workbook, sheetName);
+    const headers = new Set((rows[0] ?? []).map((header) => clean(canonicalText(String(header ?? "")))));
+    const hasRequiredHeaders = STOCK_LEDGER_REQUIRED_HEADERS.every((header) => headers.has(header));
+    if (!hasRequiredHeaders) continue;
+
+    const preview = rows
+      .slice(1, 20)
+      .flatMap((row) => row.map((cell) => canonicalText(String(cell ?? ""))))
+      .join(" ");
+    if (/\[(?:LSTB|LSTS|LIPO|LPRE|SSTB|SSTS|LSTCAM|LSTIN)/.test(preview) || /(?:ST|ETF)\/(?:US|HK)\//.test(preview)) {
+      return sheetName;
+    }
+  }
+  return null;
+}
+
+function padDatePart(value: string | number) {
+  return String(value).padStart(2, "0");
+}
+
+function normalizeClockTime(value: string) {
+  const [hour = "0", minute = "0", second = "0"] = value.split(":");
+  return `${padDatePart(hour)}:${padDatePart(minute)}:${padDatePart(second)}`;
+}
+
+function transactionTimeFromDetailLine(text: string) {
+  const times = Array.from(text.matchAll(/\b\d{1,2}:\d{2}:\d{2}\b/g)).map((match) => normalizeClockTime(match[0]));
+  return times.length >= 2 ? times[1] : null;
+}
+
+function assignTradeTimeFromDetailLine(trade: StockTradeRecord | null, text: string) {
+  if (!trade) return false;
+  const transactionTime = transactionTimeFromDetailLine(text);
+  if (!transactionTime) return false;
+  trade.tradeTime = trade.tradeTime && trade.tradeTime < transactionTime ? trade.tradeTime : transactionTime;
+  return true;
+}
+
+function normalizeWorkbookDateTime(value: unknown) {
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return {
+        date: `${parsed.y}-${padDatePart(parsed.m)}-${padDatePart(parsed.d)}`,
+        time: `${padDatePart(parsed.H)}:${padDatePart(parsed.M)}:${padDatePart(Math.floor(parsed.S))}`,
+      };
+    }
+  }
+
+  const text = clean(String(value ?? ""));
+  const match = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!match) return { date: "", time: "99:99:99" };
+
+  return {
+    date: `${match[1]}-${padDatePart(match[2])}-${padDatePart(match[3])}`,
+    time: `${padDatePart(match[4] ?? "99")}:${padDatePart(match[5] ?? "99")}:${padDatePart(match[6] ?? "99")}`,
+  };
+}
+
+function workbookMarket(value: string) {
+  const text = value.toUpperCase();
+  if (text === "US") return { market: "美国市场", currency: "USD" as const };
+  if (text === "HK") return { market: "香港市场", currency: "HKD" as const };
+  if (text === "CN" || text === "SH" || text === "SZ") return { market: "中国市场", currency: "CNY" as const };
+  return { market: "未知市场", currency: "HKD" as const };
+}
+
+function parseWorkbookInstrument(value: unknown) {
+  const text = clean(canonicalText(String(value ?? ""))).toUpperCase();
+  const match = text.match(/^(?:ST|ETF|FUND)\/([A-Z]{2})\/([A-Z0-9. -]+)$/);
+  if (!match) return null;
+  const market = workbookMarket(match[1]);
+  const code = normalizeCode(match[2]);
+  if (!code) return null;
+  const alias = KNOWN_SECURITY_ALIASES[securityAliasKey(code)];
+  return {
+    code,
+    name: alias?.name ?? displayCode(code),
+    market: alias?.market ?? market.market,
+    currency: alias?.currency ?? market.currency,
+  };
+}
+
+function stockLedgerCategoryCode(value: unknown) {
+  return canonicalText(String(value ?? "")).match(/^\[([^\]]+)\]/)?.[1].toUpperCase() ?? "";
+}
+
+function stockLedgerCategoryText(value: unknown) {
+  return clean(canonicalText(String(value ?? "")).replace(/^\[[^\]]+\]\s*/, ""));
+}
+
+function stockLedgerSide(value: unknown): TradeActivity["side"] | null {
+  const code = stockLedgerCategoryCode(value);
+  const text = stockLedgerCategoryText(value);
+
+  if (code === "LSTBD" || text.includes("股票买入成交")) return "buy";
+  if (code === "LSTSD" || code === "LPRESTSD" || text.includes("暗盘卖出成交") || text.includes("股票卖出成交")) {
+    return "sell";
+  }
+  if (code === "SSTSD" || text.includes("股票卖空成交")) return "short_open";
+  if (code === "SSTBD" || text.includes("股票买入平仓")) return "short_close";
+  if (code === "LIPOACR" || text.includes("中签新股入账")) return "acquire";
+  if (code === "LSTINTR" || code === "LSTIN" || text.includes("证券转入") || text.includes("股票进账")) return "transfer_in";
+  if (text.includes("证券转出") || text.includes("股票出账")) return "transfer_out";
+  return null;
+}
+
+function isStockLedgerSettlementRow(value: unknown) {
+  const code = stockLedgerCategoryCode(value);
+  const text = stockLedgerCategoryText(value);
+  return code === "LSTBSET" || code === "LSTSSET" || code === "LPRESCF" || text.includes("结算") || text.includes("结转");
+}
+
+function isStockLedgerCompanyActionRow(value: unknown) {
+  const code = stockLedgerCategoryCode(value);
+  const text = stockLedgerCategoryText(value);
+  return code === "LSTCAMDR" || code === "LSTCAMCR" || text.includes("公司行动股票");
+}
+
+function stockLedgerActivityNote(row: Record<string, unknown>) {
+  const category = stockLedgerCategoryText(row["业务分类"]);
+  const remark = clean(String(row["备注"] ?? ""));
+  return `${category || "股票账户流水"}；长桥股票账户明细无成交金额，已排除税务成本重放${remark ? `；${remark}` : ""}`;
+}
+
+function parseStockLedgerActivity(
+  fileName: string,
+  row: Record<string, unknown>,
+  rowNumber: number,
+  sequence: number,
+): TradeActivity | null {
+  if (isStockLedgerSettlementRow(row["业务分类"]) || isStockLedgerCompanyActionRow(row["业务分类"])) return null;
+  const side = stockLedgerSide(row["业务分类"]);
+  if (!side) return null;
+  const instrument = parseWorkbookInstrument(row["股票代码"]);
+  if (!instrument) return null;
+  const quantity = Math.abs(parseNumber(String(row["数量"] ?? "")));
+  const { date, time } = normalizeWorkbookDateTime(row["业务时间"]);
+  if (!date || quantity <= 0) return null;
+
+  return {
+    id: `longbridge-stock-ledger-${date}-${time}-${sequence}-${instrument.currency}-${displayCode(instrument.code)}-${side}`,
+    broker: "长桥",
+    date,
+    time,
+    sequence,
+    market: instrument.market,
+    currency: instrument.currency,
+    symbol: displayCode(instrument.code),
+    securityName: instrument.name,
+    side,
+    quantity,
+    amount: 0,
+    source: workbookSourceId(fileName, rowNumber),
+    note: stockLedgerActivityNote(row),
+    excludedFromTaxReplay: true,
+  };
+}
+
+function stockLedgerSplitGroupKey(row: Record<string, unknown>) {
+  const { date, time } = normalizeWorkbookDateTime(row["业务时间"]);
+  return [date, time, String(row["股票代码"] ?? ""), canonicalText(String(row["备注"] ?? ""))].join("::");
+}
+
+function parseStockLedgerSplitActivities(
+  fileName: string,
+  rows: Array<{ row: Record<string, unknown>; rowNumber: number }>,
+  startSequence: number,
+) {
+  const groups = new Map<string, Array<{ row: Record<string, unknown>; rowNumber: number }>>();
+  for (const item of rows) {
+    if (!isStockLedgerCompanyActionRow(item.row["业务分类"])) continue;
+    const group = groups.get(stockLedgerSplitGroupKey(item.row)) ?? [];
+    group.push(item);
+    groups.set(stockLedgerSplitGroupKey(item.row), group);
+  }
+
+  const activities: TradeActivity[] = [];
+  let sequence = startSequence;
+  for (const groupRows of groups.values()) {
+    const first = groupRows[0]?.row;
+    if (!first) continue;
+    const instrument = parseWorkbookInstrument(first["股票代码"]);
+    if (!instrument) continue;
+    const { date, time } = normalizeWorkbookDateTime(first["业务时间"]);
+    if (!date) continue;
+
+    const quantities = groupRows.map((item) => parseNumber(String(item.row["数量"] ?? "")));
+    const splitFromQuantity = Math.abs(quantities.filter((quantity) => quantity < 0).reduce((sum, quantity) => sum + quantity, 0));
+    const splitToQuantity = quantities.filter((quantity) => quantity > 0).reduce((sum, quantity) => sum + quantity, 0);
+    if (splitFromQuantity <= 0 || splitToQuantity <= 0) continue;
+    const note = clean(String(first["备注"] ?? ""));
+    const splitRatio = stockSplitRatioFromNote(note) ?? splitToQuantity / splitFromQuantity;
+    if (!Number.isFinite(splitRatio) || splitRatio <= 0) continue;
+    const sourceRow = Math.min(...groupRows.map((item) => item.rowNumber));
+
+    activities.push({
+      id: `longbridge-stock-ledger-${date}-${time}-${sequence}-${instrument.currency}-${displayCode(instrument.code)}-stock-split`,
+      broker: "长桥",
+      date,
+      time,
+      sequence,
+      market: instrument.market,
+      currency: instrument.currency,
+      symbol: displayCode(instrument.code),
+      securityName: instrument.name,
+      side: "stock_split",
+      quantity: splitToQuantity,
+      amount: 0,
+      splitRatio,
+      splitFromQuantity,
+      splitToQuantity,
+      source: workbookSourceId(fileName, sourceRow),
+      note: `${stockSplitActionLabel(splitRatio)}：${formatQuantity(splitFromQuantity)} 股 -> ${formatQuantity(
+        splitToQuantity,
+      )} 股；长桥股票账户明细无成交金额，已排除税务成本重放${note ? `；${note}` : ""}`,
+      excludedFromTaxReplay: true,
+    });
+    sequence += 1;
+  }
+
+  return activities;
+}
+
+function parseLongbridgeStockLedgerWorkbook(fileName: string, workbook: XLSX.WorkBook): LongbridgeWorkbookData {
+  const sheetName = findStockLedgerSheetName(workbook);
+  if (!sheetName) {
+    throw new Error("未找到长桥股票账户明细表头。");
+  }
+
+  const rows = rowObjects(workbook, sheetName).map((row, index) => ({ row, rowNumber: index + 2 }));
+  const activities: TradeActivity[] = [];
+  let sequence = 0;
+  for (const item of rows) {
+    const activity = parseStockLedgerActivity(fileName, item.row, item.rowNumber, sequence);
+    if (!activity) continue;
+    activities.push(activity);
+    sequence += 1;
+  }
+  activities.push(...parseStockLedgerSplitActivities(fileName, rows, sequence));
+
+  const dates = activities.map((activity) => activity.date).sort();
+  const dateRange = dates.length > 0 ? `${dates[0]} 至 ${dates[dates.length - 1]}` : "未识别日期";
+  return {
+    activities,
+    statementDetected: true,
+    issues:
+      activities.length > 0
+        ? [
+            {
+              id: `${fileName}-stock-ledger-no-amounts`,
+              severity: "warning",
+              title: "长桥股票账户明细不含成交金额",
+              detail: `已读取 ${activities.length} 笔股票账户流水（${dateRange}），仅用于核对覆盖月份、买卖方向、转仓和公司行动；由于文件不含成交价、成交金额、费用或现金变动，已全部排除出盈亏/税额计算。请继续上传长桥 PDF 月结单或含成交金额的交易/资金流水。`,
+              source: fileName,
+            },
+          ]
+        : [
+            {
+              id: `${fileName}-stock-ledger-empty`,
+              severity: "warning",
+              title: "未识别到可用长桥股票账户流水",
+              detail: "已识别为长桥股票账户明细，但没有读取到买卖、转入或公司行动记录。",
+              source: fileName,
+            },
+          ],
+  };
+}
+
+function securityAliasKey(value: string) {
+  return canonicalText(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function isSecurityCodeCandidate(value: string) {
+  const text = value.trim();
+  return /^\d{3,6}$/.test(text) || /^[A-Z]{1,6}(?:\.[A-Z])?$/.test(text) || /^HK\d{6,}$/i.test(text);
+}
+
+function segmentSecurityDelimiters(value: string) {
+  return clean(canonicalText(value).replace(/\s*([|/])\s*/g, " $1 "));
+}
+
+function leadingSecurityCode(value: string) {
+  const [code = ""] = segmentSecurityDelimiters(value).split(" ");
+  return isSecurityCodeCandidate(code) ? normalizeCode(code) : "";
+}
+
+function hasHongKongNameSuffix(value: string) {
+  return /\p{Script=Han}/u.test(value) && /(?:^|\s)(?:SW|SS|W|B|S|R|U|P)$/i.test(securityAliasKey(value));
+}
+
+function fallbackSecurityCode(item: string) {
+  const normalized = securityAliasKey(item);
+  const ascii = normalized.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "");
+  if (ascii) return `UNRESOLVED-${ascii.slice(0, 32)}`;
+
+  let hash = 0;
+  const hashSource = normalized || canonicalText(item);
+  for (const char of hashSource) {
+    hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  }
+  return hash ? `UNRESOLVED-${hash.toString(36).toUpperCase()}` : "UNRESOLVED-SECURITY";
+}
+
+function optionUnderlyingSecurity(item: string) {
+  const tokens = segmentSecurityDelimiters(item).split(" ").filter(Boolean);
+  const optionCode = tokens.find((token) => /^([A-Z]{1,6})\d{6}[CP]\d{5,8}$/i.test(token));
+  if (!optionCode) return null;
+  const root = optionCode.match(/^([A-Z]{1,6})\d{6}[CP]\d{5,8}$/i)?.[1].toUpperCase() ?? "";
+  const trailingSymbol = tokens.find((token) => token.toUpperCase() !== optionCode.toUpperCase() && /^[A-Z]{1,6}$/i.test(token));
+  const code = normalizeCode(trailingSymbol ?? root);
+  if (!code) return null;
+  const alias = KNOWN_SECURITY_ALIASES[securityAliasKey(code)];
+  return {
+    code,
+    name: alias?.name ?? displayCode(code),
+    codeResolution: "explicit" as const,
+    market: alias?.market,
+    currency: alias?.currency,
+  };
+}
+
+function splitSecurity(
+  item: string,
+  documentAliases: Map<string, SecurityAlias> = new Map(),
+): {
+  code: string;
+  name: string;
+  codeResolution: "explicit" | "known_alias" | "name_fallback";
+  market?: string;
+  currency?: Currency;
+} {
+  const text = clean(item);
+  const aliasKey = securityAliasKey(text);
+  const alias = documentAliases.get(aliasKey) ?? KNOWN_SECURITY_ALIASES[aliasKey];
+  if (alias) {
+    return { ...alias, codeResolution: "known_alias" };
+  }
+
+  const optionUnderlying = optionUnderlyingSecurity(text);
+  if (optionUnderlying) return optionUnderlying;
+
+  const [code = "", ...nameParts] = segmentSecurityDelimiters(text).split(" ");
+  if (isSecurityCodeCandidate(code)) {
+    const codeAlias = documentAliases.get(securityAliasKey(code)) ?? KNOWN_SECURITY_ALIASES[securityAliasKey(code)];
+    if (nameParts.length === 0 && codeAlias) {
+      return { ...codeAlias, codeResolution: "known_alias" };
+    }
+    const name = clean(canonicalText(nameParts.filter((part) => part !== "|" && part !== "/").join(" ")));
+    const nameIsCode = name && isSecurityCodeCandidate(name) && normalizeCode(name) === normalizeCode(code);
+    return {
+      code: normalizeCode(code),
+      name: name && !nameIsCode ? name : codeAlias?.name || displayCode(code),
+      codeResolution: "explicit",
+    };
+  }
+
+  return {
+    code: fallbackSecurityCode(text),
+    name: text,
+    codeResolution: "name_fallback",
+  };
+}
+
+function lineCell(line: TextLine, minX: number, maxX: number) {
+  return clean(
+    line.tokens
+      .filter((token) => token.x >= minX && token.x < maxX)
+      .map((token) => token.text)
+      .join(" "),
+  );
+}
+
+function canonicalLineCell(line: TextLine, minX: number, maxX: number) {
+  return canonicalText(lineCell(line, minX, maxX));
+}
+
+function hasDateAtStart(line: TextLine) {
+  const first = line.tokens[0]?.text;
+  return Boolean(first && DATE_RE.test(first));
+}
+
+function isBuySide(value: string) {
+  const text = canonicalText(value).toUpperCase();
+  return text.includes("买") || text === "BUY";
+}
+
+function isSellSide(value: string) {
+  const text = canonicalText(value).toUpperCase();
+  return text.includes("卖") || text === "SELL";
+}
+
+function inferTradeMarket(item: string, security: ReturnType<typeof splitSecurity>) {
+  if (security.market && security.currency) {
+    return { market: security.market, currency: security.currency };
+  }
+  if (/^\d{3,6}$/.test(security.code) || /^HK\d{6,}$/i.test(security.code)) {
+    return { market: "香港市场", currency: "HKD" as const };
+  }
+  if (hasHongKongNameSuffix(item)) {
+    return { market: "香港市场", currency: "HKD" as const };
+  }
+  if (/[A-Za-z]/.test(item) || /^[A-Z]{1,6}$/.test(security.code)) {
+    return { market: "美国市场", currency: "USD" as const };
+  }
+  return { market: "香港市场", currency: "HKD" as const };
+}
+
+function parseInlineStockTradeFields(line: TextLine): StockTradeFields | null {
+  const amountPattern = String.raw`[+-]?\d[\d,]*(?:\.\d+)?`;
+  const match = canonicalText(line.text).match(
+    new RegExp(
+      String.raw`^(20\d{2}\.\d{2}\.\d{2})\s+` +
+        String.raw`(20\d{2}\.\d{2}\.\d{2})\s+` +
+        String.raw`(OS\d+)\s+` +
+        String.raw`(\S+)\s+` +
+        String.raw`(.+?)\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})$`,
+    ),
+  );
+  if (!match) return null;
+  return {
+    tradeDate: match[1],
+    settleDate: match[2],
+    orderId: match[3],
+    side: match[4],
+    item: clean(match[5]),
+    quantity: match[6],
+    avgPrice: match[7],
+    tradeAmount: match[8],
+    cashChange: match[9],
+  };
+}
+
+function isNumericCell(value: string) {
+  return /^[+-]?\d[\d,]*(?:\.\d+)?$/.test(canonicalText(value).trim());
+}
+
+function hasCompleteStockTradeFields(fields: StockTradeFields) {
+  return (
+    DATE_RE.test(fields.tradeDate) &&
+    DATE_RE.test(fields.settleDate) &&
+    /^OS\d+/.test(fields.orderId) &&
+    (isBuySide(fields.side) || isSellSide(fields.side)) &&
+    Boolean(fields.item) &&
+    isNumericCell(fields.quantity) &&
+    isNumericCell(fields.avgPrice) &&
+    isNumericCell(fields.tradeAmount) &&
+    isNumericCell(fields.cashChange)
+  );
+}
+
+function parseInlinePortfolioFields(line: TextLine): PortfolioFields | null {
+  const amountPattern = String.raw`[+-]?\d[\d,]*(?:\.\d+)?`;
+  const optionalAmountPattern = String.raw`(?:${amountPattern}|N/A)`;
+  const match = canonicalText(line.text).match(
+    new RegExp(
+      String.raw`^(.+?)\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})\\s+` +
+        `(${amountPattern})\\s+` +
+        `(${optionalAmountPattern})\\s+` +
+        `(${optionalAmountPattern})(?:\\s+.*)?$`,
+    ),
+  );
+  if (!match) return null;
+  return {
+    item: clean(match[1]),
+    beginQty: match[2],
+    changeQty: match[3],
+    endQty: match[4],
+    price: match[5],
+    marketValue: match[6],
+    avgCost: match[7],
+    unrealizedGainLoss: match[8],
+  };
+}
+
+function isNotAvailableCell(value: string) {
+  return /^(N\/A|NA|-{1,2})$/i.test(canonicalText(value).trim());
+}
+
+function isPortfolioCostOrPnlCell(value: string) {
+  return isNumericCell(value) || isNotAvailableCell(value);
+}
+
+function hasCompletePortfolioFields(fields: PortfolioFields) {
+  const hasCoreFields =
+    Boolean(fields.item) &&
+    isNumericCell(fields.beginQty) &&
+    isNumericCell(fields.changeQty) &&
+    isNumericCell(fields.endQty) &&
+    isNumericCell(fields.price) &&
+    isNumericCell(fields.marketValue);
+
+  if (!hasCoreFields) return false;
+
+  if (parseNumber(fields.endQty) <= 0) {
+    return isPortfolioCostOrPnlCell(fields.avgCost) && isPortfolioCostOrPnlCell(fields.unrealizedGainLoss);
+  }
+
+  return (
+    isNumericCell(fields.avgCost) &&
+    isNumericCell(fields.unrealizedGainLoss)
+  );
+}
+
+async function extractPdfLines(fileName: string, data: ArrayBuffer, password?: string) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const isBrowser = typeof window !== "undefined";
+  if (isBrowser) {
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  }
+  let loadingTask;
+  let pdfDocument;
+  const pages: TextLine[][] = [];
+
+  try {
+    loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(data.slice(0)),
+      password,
+      disableWorker: !isBrowser,
+      disableFontFace: true,
+      isEvalSupported: false,
+    } as Parameters<typeof pdfjs.getDocument>[0]);
+    pdfDocument = await loadingTask.promise;
+
+    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+      const page = await pdfDocument.getPage(pageNumber);
+      try {
+        const viewport = page.getViewport({ scale: 1 });
+        const content = await page.getTextContent();
+        const tokens = content.items
+          .flatMap((item) => {
+            const candidate = item as PdfTextItemLike;
+            if (typeof candidate.str !== "string" || candidate.str.trim().length === 0) return [];
+            if (!Array.isArray(candidate.transform)) return [];
+            return [
+              {
+                text: clean(candidate.str),
+                x: Number(candidate.transform[4] ?? 0),
+                y: Number(candidate.transform[5] ?? 0),
+              },
+            ];
+          })
+          .sort((a, b) => b.y - a.y || a.x - b.x);
+
+        const groups: Array<{ y: number; tokens: TextToken[] }> = [];
+        for (const token of tokens) {
+          let group = groups.find((candidate) => Math.abs(candidate.y - token.y) < 2.2);
+          if (!group) {
+            group = { y: token.y, tokens: [] };
+            groups.push(group);
+          }
+          group.tokens.push(token);
+        }
+
+        const lines = groups
+          .sort((a, b) => b.y - a.y)
+          .map((group) => {
+            const sortedTokens = group.tokens.sort((a, b) => a.x - b.x);
+            const minX = Math.min(...sortedTokens.map((token) => token.x));
+            const maxX = Math.max(...sortedTokens.map((token) => token.x));
+            const lineY = sortedTokens.reduce((sum, token) => sum + token.y, 0) / sortedTokens.length;
+            return {
+              page: pageNumber,
+              text: clean(sortedTokens.map((token) => token.text).join(" ")),
+              tokens: sortedTokens,
+              bounds: {
+                x: minX,
+                y: lineY,
+                width: Math.max(1, maxX - minX),
+                height: 14,
+                pageWidth: viewport.width,
+                pageHeight: viewport.height,
+              },
+            };
+          });
+        pages.push(lines);
+      } finally {
+        page.cleanup?.();
+      }
+    }
+  } finally {
+    if (pdfDocument) {
+      await pdfDocument.destroy?.();
+    } else {
+      await loadingTask?.destroy?.();
+    }
+  }
+
+  if (pages.length === 0) {
+    throw new Error(`${fileName} 没有可解析页面`);
+  }
+
+  return pages.flat();
+}
+
+function parseStockTradeLine(
+  sourcePdf: string,
+  line: TextLine,
+  market: string,
+  currency: Currency,
+  sequence: number,
+  documentAliases: Map<string, SecurityAlias>,
+): StockTradeRecord | null {
+  if (!hasDateAtStart(line)) return null;
+  const cellFields: StockTradeFields = {
+    tradeDate: lineCell(line, 0, 76),
+    settleDate: lineCell(line, 76, 137),
+    orderId: lineCell(line, 137, 220),
+    side: canonicalLineCell(line, 220, 252),
+    item: lineCell(line, 252, 358),
+    quantity: lineCell(line, 358, 402),
+    avgPrice: lineCell(line, 402, 455),
+    tradeAmount: lineCell(line, 455, 525),
+    cashChange: lineCell(line, 525, 610),
+  };
+  const fields = hasCompleteStockTradeFields(cellFields) ? cellFields : parseInlineStockTradeFields(line);
+
+  if (!fields || !DATE_RE.test(fields.tradeDate) || !DATE_RE.test(fields.settleDate) || !/^OS\d+/.test(fields.orderId)) {
+    return null;
+  }
+  if (!isBuySide(fields.side) && !isSellSide(fields.side)) return null;
+
+  const security = splitSecurity(fields.item, documentAliases);
+  if (!security.code || !fields.quantity || !fields.avgPrice || !fields.tradeAmount || !fields.cashChange) return null;
+  const inferredMarket = inferTradeMarket(fields.item, security);
+
+  return {
+    sourcePdf,
+    page: line.page,
+    market: market || inferredMarket.market,
+    currency: market ? currency : inferredMarket.currency,
+    tradeDate: fields.tradeDate,
+    settleDate: fields.settleDate,
+    orderId: fields.orderId,
+    side: fields.side,
+    code: security.code,
+    name: security.name,
+    quantity: parseNumber(fields.quantity),
+    avgPrice: parseNumber(fields.avgPrice),
+    tradeAmount: parseNumber(fields.tradeAmount),
+    cashChange: parseNumber(fields.cashChange),
+    sequence,
+    codeResolution: security.codeResolution,
+  };
+}
+
+interface CashFlowFields {
+  date: string;
+  flowType: string;
+  note: string;
+  amount: string;
+}
+
+const ENGLISH_CASH_FLOW_TYPES = [
+  "Currency Conversion (Credit)",
+  "Currency Conversion (Debit)",
+  "Reward Redemption Stock Cash Coupon",
+  "Reward Redemption Cash Coupon",
+  "Cash Withdrawal",
+  "Cash Deposit",
+  "Debit Interest",
+  "Cash Dividend",
+  "Withholding Tax/Dividend Fee",
+  "Company Action Other Fee",
+  "Company Action",
+];
+
+function isTaxInvoiceDetailLine(text: string) {
+  return /^20\d{2}\.\d{2}\.\d{2}\s+\d{5,}\b/.test(text) && (text.includes("%") || text.includes("(Exempted)"));
+}
+
+function parseInlineCashFlowFields(line: TextLine): CashFlowFields | null {
+  const amountPattern = String.raw`[+-]?\d[\d,]*(?:\.\d+)?`;
+  const text = canonicalText(line.text);
+  if (isTaxInvoiceDetailLine(text)) return null;
+  const match = text.match(new RegExp(String.raw`^(20\d{2}\.\d{2}\.\d{2})\s+(.+?)\s+(${amountPattern})$`));
+  if (!match || /\bOS\d+\b/.test(match[2])) return null;
+
+  const detail = clean(match[2]);
+  const englishType = ENGLISH_CASH_FLOW_TYPES.find((type) => detail.toLowerCase().startsWith(type.toLowerCase()));
+  if (englishType) {
+    return {
+      date: match[1],
+      flowType: englishType,
+      note: clean(detail.slice(englishType.length)),
+      amount: match[3],
+    };
+  }
+
+  const [flowType = "", ...noteParts] = detail.split(" ");
+  return {
+    date: match[1],
+    flowType,
+    note: clean(noteParts.join(" ")),
+    amount: match[3],
+  };
+}
+
+function isCurrencySummaryItem(value: string) {
+  return /^(HKD|USD|CNY|SGD)$/i.test(clean(value));
+}
+
+function inferCashFlowCurrency(fields: CashFlowFields, fallback: Currency) {
+  const text = canonicalText(`${fields.flowType} ${fields.note}`).toUpperCase();
+  // 港股现金分红备注会同时出现申报币(如 RMB1.425/SH)和实际付款币(PAY IN APPROX.HKD…),
+  // 入账金额以付款币为准,需优先识别 “PAY IN …” 指明的币种。
+  const payIn = text.match(/PAY IN\s+(?:APPROX\.?\s*)?(HKD|USD|CNY|RMB|SGD)/)?.[1];
+  if (payIn) return payIn === "RMB" ? "CNY" : (payIn as Currency);
+  // 现金分红/公司行动等带证券的现金流:直接按备注里的证券所属市场判定结算币种。
+  // 这样可避免两类误判:(1)分组“币种:美元”表头跨页未重复导致回退默认港元(如 TSM 派息);
+  // (2)港股备注里 RMB/USD 仅为每股申报口径(如 RMB1.425/SH)且常被换行截断,不能据此改判。
+  if (hkSymbolFromNote(fields.note)) return "HKD";
+  if (usSymbolFromNote(fields.note)) return "USD";
+  if (text.includes("USD") || text.includes("美元")) return "USD";
+  if (text.includes("CNY") || text.includes("RMB") || text.includes("人民币")) return "CNY";
+  if (text.includes("HKD") || text.includes("港币")) return "HKD";
+  return fallback;
+}
+
+function parseCashFlowLine(
+  sourcePdf: string,
+  line: TextLine,
+  currency: Currency,
+): CashFlowRecord | null {
+  if (!hasDateAtStart(line)) return null;
+  const cellFields: CashFlowFields = {
+    date: lineCell(line, 0, 105),
+    flowType: lineCell(line, 105, 260),
+    note: lineCell(line, 260, 520),
+    amount: lineCell(line, 520, 610),
+  };
+  const fields =
+    DATE_RE.test(cellFields.date) && cellFields.flowType && isNumericCell(cellFields.amount)
+      ? cellFields
+      : parseInlineCashFlowFields(line);
+
+  if (!fields || !DATE_RE.test(fields.date) || !fields.flowType || !fields.amount) return null;
+
+  return {
+    sourcePdf,
+    page: line.page,
+    currency: inferCashFlowCurrency(fields, currency),
+    date: fields.date,
+    flowType: fields.flowType,
+    note: fields.note,
+    amount: parseNumber(fields.amount),
+    evidence: {
+      page: line.page,
+      text: line.text,
+      bounds: line.bounds,
+    },
+  };
+}
+
+function isStandaloneCashFlowCandidate(cashFlow: CashFlowRecord) {
+  const flowType = canonicalText(cashFlow.flowType);
+  const note = canonicalText(cashFlow.note);
+  const text = `${flowType} ${note}`.toLowerCase();
+  return (
+    flowType.includes("现金分红") ||
+    flowType.includes("公司行动") ||
+    flowType.includes("转入余额通") ||
+    flowType.includes("余额通转出") ||
+    flowType.includes("新股") ||
+    text.includes("cash dividend") ||
+    text.includes("withholding tax/dividend fee") ||
+    ENGLISH_CASH_FLOW_TYPES.some((type) => text.startsWith(type.toLowerCase()))
+  );
+}
+
+function isPositionMoveSecurityToken(value: string) {
+  return Boolean(leadingSecurityCode(value));
+}
+
+function isPositionMoveNoteToken(value: string) {
+  const text = canonicalText(value);
+  return text.includes("账户迁移") || text.includes("户口迁移") || text.includes("转仓") || text.includes("转入") || text.includes("转出");
+}
+
+function isStandalonePositionMoveCandidate(line: TextLine) {
+  if (!hasDateAtStart(line)) return false;
+  const text = canonicalText(line.text);
+  return (
+    text.includes("股票进账") ||
+    text.includes("股票出账") ||
+    text.includes("证券转入") ||
+    text.includes("证券转出") ||
+    text.includes("公司行动股票") ||
+    text.includes("中签新股入账")
+  );
+}
+
+function positionMoveFromFields(
+  sourcePdf: string,
+  page: number,
+  market: string,
+  fields: PositionMoveFields,
+  documentAliases: Map<string, SecurityAlias>,
+): PositionMoveRecord | null {
+  if (!DATE_RE.test(fields.date) || !fields.moveType || !fields.item || !isNumericCell(fields.quantity)) return null;
+  const security = splitSecurity(fields.item, documentAliases);
+  const inferredMarket = inferTradeMarket(fields.item, security);
+  return {
+    sourcePdf,
+    page,
+    market: market || security.market || inferredMarket.market,
+    date: fields.date,
+    moveType: fields.moveType,
+    code: security.code,
+    name: security.name,
+    note: fields.note,
+    quantity: parseNumber(fields.quantity),
+  };
+}
+
+function parsePositionMoveLine(
+  sourcePdf: string,
+  line: TextLine,
+  market: string,
+  documentAliases: Map<string, SecurityAlias>,
+): PositionMoveRecord | null {
+  if (!hasDateAtStart(line)) return null;
+  const tokens = line.tokens;
+  const cellFields: PositionMoveFields = {
+    date: lineCell(line, 0, 105),
+    moveType: lineCell(line, 105, 220),
+    item: lineCell(line, 220, 340),
+    note: lineCell(line, 340, 520),
+    quantity: lineCell(line, 520, 610),
+  };
+  const fromCells = positionMoveFromFields(sourcePdf, line.page, market, cellFields, documentAliases);
+  if (fromCells) return fromCells;
+
+  const date = tokens[0]?.text ?? "";
+  const quantity = tokens.at(-1)?.text ?? "";
+  const noteTokenIndex = tokens.findIndex((token, index) => {
+    if (index < 2 || index >= tokens.length - 1) return false;
+    const text = canonicalText(token.text);
+    return token.x >= 340 || isPositionMoveNoteToken(text) || /^IPO\b/i.test(text) || text === "申购" || text === "赎回";
+  });
+  if (noteTokenIndex > 0) {
+    const itemTokenIndex = tokens.findIndex((token, index) => {
+      if (index <= 1 || index >= noteTokenIndex) return false;
+      return token.x >= 110 && Boolean(clean(canonicalText(token.text)));
+    });
+    if (itemTokenIndex > 0) {
+      const moveType = clean(tokens.slice(1, itemTokenIndex).map((token) => token.text).join(" "));
+      const item = clean(tokens.slice(itemTokenIndex, noteTokenIndex).map((token) => token.text).join(" "));
+      const note = clean(tokens.slice(noteTokenIndex, tokens.length - 1).map((token) => token.text).join(" "));
+      const fromNameItem = positionMoveFromFields(sourcePdf, line.page, market, { date, moveType, item, note, quantity }, documentAliases);
+      if (fromNameItem) return fromNameItem;
+    }
+  }
+
+  const codeIndex = tokens.findIndex((token, index) => {
+    if (index < 2 || token.x > 380) return false;
+    return isPositionMoveSecurityToken(token.text);
+  });
+  if (codeIndex < 2) return null;
+
+  const noteStartIndex = tokens.findIndex((token, index) => {
+    if (index <= codeIndex || index >= tokens.length - 1) return false;
+    const text = canonicalText(token.text);
+    const isKnownNote = isPositionMoveNoteToken(text) || /^IPO\b/i.test(text) || text === "申购" || text === "赎回";
+    if (index === codeIndex + 1 && !isKnownNote) return false;
+    return token.x >= 340 || isKnownNote;
+  });
+  const itemEndIndex = noteStartIndex > 0 ? noteStartIndex : tokens.length - 1;
+  const moveType = clean(tokens.slice(1, codeIndex).map((token) => token.text).join(" "));
+  const item = clean(tokens.slice(codeIndex, itemEndIndex).map((token) => token.text).join(" "));
+  const note =
+    noteStartIndex > 0
+      ? clean(tokens.slice(noteStartIndex, tokens.length - 1).map((token) => token.text).join(" "))
+      : "";
+
+  return positionMoveFromFields(sourcePdf, line.page, market, { date, moveType, item, note, quantity }, documentAliases);
+}
+
+function parsePortfolioLine(
+  sourcePdf: string,
+  line: TextLine,
+  statementMonth: string,
+  market: string,
+  currency: Currency,
+  documentAliases: Map<string, SecurityAlias>,
+): PortfolioRecord | null {
+  const cellFields: PortfolioFields = {
+    item: lineCell(line, 0, 120),
+    beginQty: lineCell(line, 120, 170),
+    changeQty: lineCell(line, 170, 225),
+    endQty: lineCell(line, 225, 275),
+    price: lineCell(line, 275, 318),
+    marketValue: lineCell(line, 318, 370),
+    avgCost: lineCell(line, 370, 414),
+    unrealizedGainLoss: lineCell(line, 414, 470),
+  };
+  const fields = hasCompletePortfolioFields(cellFields) ? cellFields : parseInlinePortfolioFields(line);
+  if (!fields) return null;
+
+  const canonicalItem = canonicalText(fields.item);
+  if (
+    !fields.item ||
+    canonicalItem.startsWith("汇总") ||
+    canonicalItem.startsWith("股票") ||
+    canonicalItem.startsWith("余额通") ||
+    isCurrencySummaryItem(canonicalItem)
+  ) {
+    return null;
+  }
+
+  if (!hasCompletePortfolioFields(fields)) {
+    return null;
+  }
+
+  const security = splitSecurity(fields.item, documentAliases);
+  if (!market && security.codeResolution === "name_fallback") return null;
+  if (!security.code) return null;
+  const inferredMarket = inferTradeMarket(fields.item, security);
+
+  return {
+    sourcePdf,
+    page: line.page,
+    statementMonth: statementMonth || undefined,
+    market: market || inferredMarket.market,
+    currency: market ? currency : inferredMarket.currency,
+    code: security.code,
+    name: security.name,
+    beginQty: parseNumber(fields.beginQty),
+    changeQty: parseNumber(fields.changeQty),
+    endQty: parseNumber(fields.endQty),
+    price: parseNumber(fields.price),
+    marketValue: parseNumber(fields.marketValue),
+    avgCost: parseNumber(fields.avgCost),
+    unrealizedGainLoss: parseNumber(fields.unrealizedGainLoss),
+  };
+}
+
+function addDocumentSecurityAlias(
+  aliases: Map<string, SecurityAlias>,
+  security: { code: string; name: string; market?: string; currency?: Currency },
+) {
+  if (!security.code || security.code.startsWith("UNRESOLVED-")) return;
+  const nameKey = securityAliasKey(security.name);
+  const codeKey = securityAliasKey(security.code);
+  if (!nameKey || nameKey === codeKey) return;
+  aliases.set(nameKey, {
+    code: security.code,
+    name: security.name,
+    market: security.market,
+    currency: security.currency,
+  });
+}
+
+function manualSecurityAliasMap(manualAliases: ManualSecurityAliasInput[] = []) {
+  const aliases = new Map<string, SecurityAlias>();
+  for (const item of manualAliases) {
+    const name = clean(canonicalText(item.name ?? ""));
+    const symbol = normalizeCode(clean(canonicalText(item.symbol ?? "")));
+    if (!name || !symbol || symbol.startsWith("UNRESOLVED-")) continue;
+    aliases.set(securityAliasKey(name), {
+      code: symbol,
+      name,
+      market: item.market,
+      currency: item.currency,
+    });
+  }
+  return aliases;
+}
+
+function parseLongbridgeLines(
+  sourcePdf: string,
+  lines: TextLine[],
+  manualAliases: ManualSecurityAliasInput[] = [],
+): LongbridgeRawData {
+  const raw: LongbridgeRawData = {
+    trades: [],
+    cashFlows: [],
+    moves: [],
+    positions: [],
+    issues: [],
+    statementDetected: false,
+  };
+
+  let activeTable: "none" | "portfolio" | "stock_trade" | "cash_flow" | "position_move" = "none";
+  let tradeMarket = "";
+  let tradeCurrency: Currency = "HKD";
+  let cashCurrency: Currency = "HKD";
+  let moveMarket = "";
+  let portfolioMarket = "";
+  let portfolioCurrency: Currency = "HKD";
+  let statementMonth = "";
+  let sequence = 0;
+  const fallbackSecurityNames = new Map<string, string>();
+  const documentSecurityAliases = manualSecurityAliasMap(manualAliases);
+  let lastTradeForTime: StockTradeRecord | null = null;
+  let readingTradeTimes = false;
+
+  for (const line of lines) {
+    const text = canonicalText(line.text);
+    if (isLongbridgeMonthlyStatement(text)) {
+      raw.statementDetected = true;
+    }
+    const statementMonthMatch = text.match(/^(20\d{2})\.(0[1-9]|1[0-2])$/);
+    if (statementMonthMatch) {
+      statementMonth = `${statementMonthMatch[1]}-${statementMonthMatch[2]}`;
+    }
+    if (
+      (/Order Time/i.test(text) && /Transaction Time/i.test(text)) ||
+      (text.includes("下单时间") && text.includes("成交时间"))
+    ) {
+      readingTradeTimes = true;
+      continue;
+    }
+    if (readingTradeTimes) {
+      if (assignTradeTimeFromDetailLine(lastTradeForTime, text)) {
+        continue;
+      }
+      readingTradeTimes = false;
+    }
+    if (activeTable === "stock_trade" && assignTradeTimeFromDetailLine(lastTradeForTime, text)) {
+      continue;
+    }
+    if (text.includes("项目") && text.includes("期初持仓") && text.includes("浮动盈亏")) {
+      activeTable = "portfolio";
+      continue;
+    }
+    if (text.includes("股票交易明细") || (text.includes("交易日期") && text.includes("编号") && text.includes("变动金额"))) {
+      activeTable = "stock_trade";
+      continue;
+    }
+    if (text.includes("发生日期") && text.includes("类型") && text.includes("备注") && text.includes("金额")) {
+      activeTable = "cash_flow";
+      continue;
+    }
+    if (text.includes("发生日期") && text.includes("类型") && text.includes("项目") && text.includes("数量")) {
+      activeTable = "position_move";
+      continue;
+    }
+
+    const tradeMarketMatch = text.match(/^市场:\s*(.+?);\s*币种:\s*(.+)$/);
+    if (tradeMarketMatch && activeTable === "stock_trade") {
+      tradeMarket = tradeMarketMatch[1];
+      tradeCurrency = mapCurrency(tradeMarketMatch[2]);
+      continue;
+    }
+
+    const portfolioMarketMatch = text.match(/^股票\s+\((.+?);\s*(.+?)\)$/);
+    if (portfolioMarketMatch && activeTable === "portfolio") {
+      portfolioMarket = portfolioMarketMatch[1];
+      portfolioCurrency = mapCurrency(portfolioMarketMatch[2]);
+      continue;
+    }
+
+    if (text.startsWith("币种:") && activeTable === "cash_flow") {
+      cashCurrency = mapCurrency(text.replace("币种:", ""));
+      continue;
+    }
+
+    if (text.startsWith("市场:") && activeTable === "position_move") {
+      moveMarket = text.replace("市场:", "").trim();
+      continue;
+    }
+
+    if (isStandalonePositionMoveCandidate(line)) {
+      const move = parsePositionMoveLine(sourcePdf, line, moveMarket, documentSecurityAliases);
+      if (move) {
+        activeTable = "position_move";
+        raw.moves.push(move);
+        addDocumentSecurityAlias(documentSecurityAliases, {
+          code: move.code,
+          name: move.name,
+          market: move.market,
+        });
+        continue;
+      }
+    }
+
+    if (activeTable !== "stock_trade" && activeTable !== "cash_flow" && activeTable !== "position_move") {
+      const cashFlow = parseCashFlowLine(sourcePdf, line, cashCurrency);
+      if (cashFlow && isStandaloneCashFlowCandidate(cashFlow)) {
+        raw.cashFlows.push(cashFlow);
+        continue;
+      }
+    }
+
+    if (activeTable === "stock_trade" || /\bOS\d+/.test(text)) {
+      const trade = parseStockTradeLine(sourcePdf, line, tradeMarket, tradeCurrency, sequence, documentSecurityAliases);
+      if (trade) {
+        activeTable = "stock_trade";
+        raw.trades.push(trade);
+        lastTradeForTime = trade;
+        addDocumentSecurityAlias(documentSecurityAliases, {
+          code: trade.code,
+          name: trade.name,
+          market: trade.market,
+          currency: trade.currency,
+        });
+        if (trade.codeResolution === "name_fallback") {
+          fallbackSecurityNames.set(trade.code, trade.name);
+        }
+        sequence += 1;
+        continue;
+      }
+      const cashFlow = parseCashFlowLine(sourcePdf, line, cashCurrency);
+      if (cashFlow) {
+        activeTable = "cash_flow";
+        raw.cashFlows.push(cashFlow);
+        continue;
+      }
+      if (activeTable === "stock_trade") continue;
+    }
+
+    if (activeTable === "cash_flow") {
+      const cashFlow = parseCashFlowLine(sourcePdf, line, cashCurrency);
+      if (cashFlow) raw.cashFlows.push(cashFlow);
+      continue;
+    }
+
+    if (activeTable === "position_move") {
+      const move = parsePositionMoveLine(sourcePdf, line, moveMarket, documentSecurityAliases);
+      if (move) raw.moves.push(move);
+      continue;
+    }
+
+    if (activeTable === "none") {
+      const position = parsePortfolioLine(sourcePdf, line, statementMonth, portfolioMarket, portfolioCurrency, documentSecurityAliases);
+      if (position) {
+        raw.positions.push(position);
+        addDocumentSecurityAlias(documentSecurityAliases, position);
+        continue;
+      }
+    }
+
+    if (activeTable === "portfolio") {
+      const position = parsePortfolioLine(sourcePdf, line, statementMonth, portfolioMarket, portfolioCurrency, documentSecurityAliases);
+      if (position) {
+        raw.positions.push(position);
+        addDocumentSecurityAlias(documentSecurityAliases, position);
+      }
+    }
+  }
+
+  for (const [code, name] of fallbackSecurityNames) {
+    raw.issues.push({
+      id: `${sourcePdf}-${code}-symbol-fallback`,
+      severity: "warning",
+      title: `${name} 股票代码需复核`,
+      detail: `该月结单的文本层缺少股票代码，系统已用 ${displayCode(code)} 作为临时代码归集交易。请在计算结果中核对该标的，必要时补充代码映射。`,
+      source: sourcePdf,
+    });
+  }
+
+  return raw;
+}
+
+function extractIpoCode(note: string) {
+  const match = note.match(/IPO\s+(\d+)\.HK/i);
+  return match ? normalizeCode(match[1]) : null;
+}
+
+const US_SECURITY_NOTE_RE = /\b([A-Z]{1,5})(?:\.US|\([A-Z]{2}[A-Z0-9]{8,12}\))/i;
+const US_DIVIDEND_NOTE_RE = /\b([A-Z]{1,5})(?:\.US|\([A-Z]{2}[A-Z0-9]{8,12}\))\s+Cash Dividend/i;
+// 港股公司行动备注形如 “#2648.HK Anjoy Food …” / “Handling Fee 02648.HK …”，代码统一补零到 5 位。
+const HK_SECURITY_NOTE_RE = /\b0*(\d{4,5})\.HK\b/i;
+
+function hkSymbolFromNote(note: string) {
+  const match = canonicalText(note).match(HK_SECURITY_NOTE_RE);
+  return match ? displayCode(match[1]) : null;
+}
+
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+// 港股(H股)现金分红备注形如 “RMB1.425/SH(-10%)”,表示已在源头按 10% 预扣所得税,入账金额为
+// 税后净额(常伴随 “(NET)”,但可能因换行被截断)。返回预扣率(0~1),无此标记返回 null。
+function dividendNetWithholdingRate(note: string): number | null {
+  const match = canonicalText(note).match(/\(\s*-\s*(\d+(?:\.\d+)?)\s*%\s*\)/);
+  if (!match) return null;
+  const pct = Number(match[1]);
+  return Number.isFinite(pct) && pct > 0 && pct < 100 ? pct / 100 : null;
+}
+
+function dividendSymbolFromNote(note: string) {
+  return canonicalText(note).match(US_DIVIDEND_NOTE_RE)?.[1].toUpperCase() ?? hkSymbolFromNote(note);
+}
+
+function usSymbolFromNote(note: string) {
+  return canonicalText(note).match(US_SECURITY_NOTE_RE)?.[1].toUpperCase() ?? null;
+}
+
+function securitySymbolFromNote(note: string) {
+  return usSymbolFromNote(note) ?? hkSymbolFromNote(note);
+}
+
+function isDividendCashFlow(cashFlow: CashFlowRecord) {
+  const flowType = canonicalText(cashFlow.flowType).toLowerCase();
+  const note = canonicalText(cashFlow.note).toLowerCase();
+  const isDividend = flowType.includes("分红") || flowType.includes("cash dividend") || note.includes("cash dividend");
+  return isDividend && Boolean(dividendSymbolFromNote(cashFlow.note)) && cashFlow.amount > 0;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+const DIVIDEND_EVIDENCE_RENDER_SCALE = 1.35;
+const DIVIDEND_EVIDENCE_IMAGE_QUALITY = 0.72;
+
+async function attachDividendScreenshots(
+  fileName: string,
+  data: ArrayBuffer,
+  password: string | undefined,
+  cashFlows: CashFlowRecord[],
+) {
+  const targets = cashFlows.filter((cashFlow) => cashFlow.sourcePdf === fileName && cashFlow.evidence && isDividendCashFlow(cashFlow));
+  if (targets.length === 0 || typeof document === "undefined") return;
+
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    let loadingTask;
+    let pdfDocument;
+    try {
+      loadingTask = pdfjs.getDocument({
+        data: new Uint8Array(data),
+        password,
+        disableFontFace: true,
+        isEvalSupported: false,
+      } as Parameters<typeof pdfjs.getDocument>[0]);
+      pdfDocument = await loadingTask.promise;
+
+      const targetsByPage = new Map<number, CashFlowRecord[]>();
+      for (const target of targets) {
+        const pageTargets = targetsByPage.get(target.page) ?? [];
+        pageTargets.push(target);
+        targetsByPage.set(target.page, pageTargets);
+      }
+
+      for (const [pageNumber, pageTargets] of targetsByPage) {
+        const page = await pdfDocument.getPage(pageNumber);
+        try {
+          const scale = DIVIDEND_EVIDENCE_RENDER_SCALE;
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          const canvasContext = canvas.getContext("2d");
+          if (!canvasContext) continue;
+          await page.render({ canvasContext, viewport }).promise;
+
+          try {
+            for (const target of pageTargets) {
+              if (!target.evidence) continue;
+              const { bounds } = target.evidence;
+              const pageWidth = bounds.pageWidth || viewport.width / scale;
+              const pageHeight = bounds.pageHeight || viewport.height / scale;
+              const rowCanvasY = (pageHeight - bounds.y) * scale;
+              const cropXPdf = 0;
+              const cropHeightPx = Math.min(180 * scale, canvas.height);
+              const cropYPx = clampNumber(rowCanvasY - 58 * scale, 0, Math.max(0, canvas.height - cropHeightPx));
+              const cropWidthPx = Math.min(canvas.width - cropXPdf * scale, (pageWidth - cropXPdf) * scale);
+              const boundedCropHeightPx = Math.min(cropHeightPx, canvas.height - cropYPx);
+              if (cropWidthPx <= 0 || boundedCropHeightPx <= 0) continue;
+
+              const cropCanvas = document.createElement("canvas");
+              cropCanvas.width = Math.ceil(cropWidthPx);
+              cropCanvas.height = Math.ceil(boundedCropHeightPx);
+              const cropContext = cropCanvas.getContext("2d");
+              if (!cropContext) continue;
+              cropContext.drawImage(
+                canvas,
+                cropXPdf * scale,
+                cropYPx,
+                cropWidthPx,
+                boundedCropHeightPx,
+                0,
+                0,
+                cropCanvas.width,
+                cropCanvas.height,
+              );
+              target.evidence.imageDataUrl = cropCanvas.toDataURL("image/jpeg", DIVIDEND_EVIDENCE_IMAGE_QUALITY);
+              cropCanvas.width = 0;
+              cropCanvas.height = 0;
+            }
+          } finally {
+            canvas.width = 0;
+            canvas.height = 0;
+          }
+        } finally {
+          page.cleanup?.();
+        }
+      }
+    } finally {
+      if (pdfDocument) {
+        await pdfDocument.destroy?.();
+      } else {
+        await loadingTask?.destroy?.();
+      }
+    }
+  } catch {
+    // 截图只是辅助核对材料，失败时保留分红解析结果即可。
+  }
+}
+
+function buildDividends(cashFlows: CashFlowRecord[]): DividendIncome[] {
+  const dividends: DividendIncome[] = [];
+  const pendingWithholding = new Map<string, number>();
+  const pendingFees = new Map<string, number>();
+  const symbolsByDate = new Map<string, Set<string>>();
+
+  for (const cashFlow of cashFlows) {
+    const symbol = usSymbolFromNote(cashFlow.note);
+    if (!symbol) continue;
+    const symbols = symbolsByDate.get(cashFlow.date) ?? new Set<string>();
+    symbols.add(symbol);
+    symbolsByDate.set(cashFlow.date, symbols);
+  }
+
+  const singleSymbolForDate = (date: string) => {
+    const symbols = symbolsByDate.get(date);
+    return symbols?.size === 1 ? Array.from(symbols)[0] : null;
+  };
+
+  for (const cashFlow of cashFlows) {
+    const flowType = canonicalText(cashFlow.flowType);
+    const note = canonicalText(cashFlow.note);
+    const dividendSymbol = securitySymbolFromNote(cashFlow.note) ?? singleSymbolForDate(cashFlow.date);
+    const lowerFlowType = flowType.toLowerCase();
+    const lowerNote = note.toLowerCase();
+    if (
+      (flowType.includes("分红") || lowerFlowType.includes("cash dividend") || lowerNote.includes("cash dividend")) &&
+      dividendSymbol &&
+      cashFlow.amount > 0
+    ) {
+      const symbol = dividendSymbol;
+      const key = `${cashFlow.date}-${symbol}`;
+      // 港股(H股)分红入账为税后净额(备注含 “(-10%)”),按预扣率反算税前总额与已预扣税,
+      // 使境外税收抵免按真实税前口径计算。仅命中长桥港股此类备注,不影响其它分红/券商。
+      const netWithholdingRate = dividendNetWithholdingRate(cashFlow.note);
+      const impliedWithheld =
+        netWithholdingRate !== null
+          ? round2(cashFlow.amount * (netWithholdingRate / (1 - netWithholdingRate)))
+          : 0;
+      const grossAmount = round2(cashFlow.amount + impliedWithheld);
+      dividends.push({
+        id: `${cashFlow.sourcePdf}-dividend-${symbol}-${cashFlow.date}`,
+        broker: "长桥",
+        date: normalizeDate(cashFlow.date),
+        currency: cashFlow.currency,
+        symbol,
+        securityName: symbol,
+        grossAmount,
+        taxWithheld: round2((pendingWithholding.get(key) ?? 0) + impliedWithheld),
+        fee: pendingFees.get(key) ?? 0,
+        source: cashFlow.sourcePdf,
+        note:
+          netWithholdingRate !== null
+            ? `${cashFlow.note}（已按 -${round2(netWithholdingRate * 100)}% 预扣由税后净额 ${round2(
+                cashFlow.amount,
+              )} 还原税前 ${grossAmount}，预扣税 ${impliedWithheld}）`
+            : cashFlow.note,
+        evidence: cashFlow.evidence
+          ? {
+              page: cashFlow.evidence.page,
+              text: cashFlow.evidence.text,
+              imageDataUrl: cashFlow.evidence.imageDataUrl,
+            }
+          : undefined,
+      });
+      pendingWithholding.delete(key);
+      pendingFees.delete(key);
+      continue;
+    }
+
+    if (flowType.includes("公司行动") && (note.includes("Handling Fee") || note.includes("Scrip Fee"))) {
+      const symbol = securitySymbolFromNote(cashFlow.note);
+      if (!symbol) continue;
+      const key = `${cashFlow.date}-${symbol}`;
+      const existing = dividends.find((dividend) => dividend.date === normalizeDate(cashFlow.date) && dividend.symbol === symbol);
+      if (existing) {
+        existing.fee += Math.abs(cashFlow.amount);
+      } else {
+        pendingFees.set(key, (pendingFees.get(key) ?? 0) + Math.abs(cashFlow.amount));
+      }
+      continue;
+    }
+
+    // 分红预扣税:除显式的 “Withholding Tax/Dividend Fee” 外,长桥对 “Payment in Lieu of Dividend”
+    // 等较长备注会换行截断,丢掉该标记。故对“公司行动”类负数费用、且备注提及 dividend/分红的,
+    // 一并按预扣税归集(手续费/代收股息费已在上一分支用 continue 排除)。
+    const isExplicitWithholding =
+      note.includes("Withholding Tax/Dividend Fee") || lowerFlowType.includes("withholding tax/dividend fee");
+    const isDividendCompanyActionFee =
+      flowType.includes("公司行动") && cashFlow.amount < 0 && /dividend|分红/i.test(note);
+    if (isExplicitWithholding || isDividendCompanyActionFee) {
+      const symbol = securitySymbolFromNote(cashFlow.note) ?? singleSymbolForDate(cashFlow.date);
+      if (!symbol) continue;
+      const key = `${cashFlow.date}-${symbol}`;
+      const existing = dividends.find((dividend) => dividend.date === normalizeDate(cashFlow.date) && dividend.symbol === symbol);
+      if (existing) {
+        existing.taxWithheld += Math.abs(cashFlow.amount);
+      } else {
+        pendingWithholding.set(key, (pendingWithholding.get(key) ?? 0) + Math.abs(cashFlow.amount));
+      }
+    }
+  }
+
+  return dividends;
+}
+
+function stateAvgCost(state: PositionState) {
+  return Math.abs(state.quantity) < 1e-9 ? 0 : state.costBasis / state.quantity;
+}
+
+function eventSecurityKey(event: Pick<EventRecord, "currency" | "code">) {
+  return `${event.currency}::${normalizeCode(event.code)}`;
+}
+
+function eventUsageKey(event: EventRecord) {
+  return `${event.date}::${event.sequence}::${event.currency}::${normalizeCode(event.code)}::${event.kind}`;
+}
+
+function explicitBuyCostBasis(event: EventRecord) {
+  if (event.kind !== "buy") return null;
+  const costBasis = -event.cash;
+  if (!Number.isFinite(costBasis) || costBasis <= 0 || event.quantity <= 1e-8) return null;
+  return costBasis;
+}
+
+function consumeRemainingBuyCost(
+  event: EventRecord,
+  quantity: number,
+  usages: Map<string, { quantity: number; costBasis: number }>,
+) {
+  const costBasis = explicitBuyCostBasis(event);
+  if (costBasis === null || event.kind !== "buy") return { quantity: 0, costBasis: 0 };
+
+  const usageKey = eventUsageKey(event);
+  const used = usages.get(usageKey) ?? { quantity: 0, costBasis: 0 };
+  const remainingQuantity = Math.max(0, event.quantity - used.quantity);
+  const remainingCostBasis = Math.max(0, costBasis - used.costBasis);
+  if (remainingQuantity <= 1e-8 || remainingCostBasis <= 1e-8) return { quantity: 0, costBasis: 0 };
+
+  const consumedQuantity = Math.min(quantity, remainingQuantity);
+  const consumedCostBasis = (remainingCostBasis * consumedQuantity) / remainingQuantity;
+  return { quantity: consumedQuantity, costBasis: consumedCostBasis };
+}
+
+function borrowLaterSameDayBuyCost(
+  events: EventRecord[],
+  sellIndex: number,
+  sellEvent: Extract<EventRecord, { kind: "sell" }>,
+  shortage: number,
+  usages: Map<string, { quantity: number; costBasis: number }>,
+) {
+  if (shortage <= 1e-8) return null;
+  const securityKey = eventSecurityKey(sellEvent);
+  const borrowed: Array<{ key: string; quantity: number; costBasis: number }> = [];
+  let borrowedQuantity = 0;
+  let borrowedCostBasis = 0;
+
+  for (let index = sellIndex + 1; index < events.length && borrowedQuantity + 1e-8 < shortage; index += 1) {
+    const event = events[index];
+    if (event.date !== sellEvent.date) break;
+    if (event.kind !== "buy" || eventSecurityKey(event) !== securityKey) continue;
+
+    const consumed = consumeRemainingBuyCost(event, shortage - borrowedQuantity, usages);
+    if (consumed.quantity <= 1e-8) continue;
+    borrowed.push({ key: eventUsageKey(event), ...consumed });
+    borrowedQuantity += consumed.quantity;
+    borrowedCostBasis += consumed.costBasis;
+  }
+
+  if (borrowedQuantity + 1e-8 < shortage) return null;
+
+  for (const item of borrowed) {
+    const used = usages.get(item.key) ?? { quantity: 0, costBasis: 0 };
+    usages.set(item.key, {
+      quantity: used.quantity + item.quantity,
+      costBasis: used.costBasis + item.costBasis,
+    });
+  }
+
+  return { quantity: borrowedQuantity, costBasis: borrowedCostBasis };
+}
+
+function manualCostMap(manualCosts: ManualCostInput[] = []) {
+  const costs = new Map<string, number>();
+  for (const item of manualCosts) {
+    if (!item.id) continue;
+    if (!Number.isFinite(item.costBasis) || item.costBasis < 0) continue;
+    costs.set(item.id, item.costBasis);
+  }
+  return costs;
+}
+
+function stockSplitActionLabel(ratio: number) {
+  return ratio >= 1 ? "拆股" : "合股";
+}
+
+function formatQuantity(value: number) {
+  return value.toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+
+function securityPositionKey(currency: Currency, code: string) {
+  return `${currency}::${normalizeCode(code)}`;
+}
+
+function isSameSecurity(position: PortfolioRecord, trade: StockTradeRecord) {
+  return securityPositionKey(position.currency, position.code) === securityPositionKey(trade.currency, trade.code);
+}
+
+function normalizedStatementMonth(value: string) {
+  const date = normalizeDate(value);
+  return date.length >= 7 ? date.slice(0, 7) : "";
+}
+
+function compareStockTrades(a: StockTradeRecord, b: StockTradeRecord) {
+  return (
+    normalizeDate(a.tradeDate).localeCompare(normalizeDate(b.tradeDate)) ||
+    (a.tradeTime ?? "99:99:99").localeCompare(b.tradeTime ?? "99:99:99") ||
+    a.sequence - b.sequence
+  );
+}
+
+function fallbackOpeningCost(position: PortfolioRecord) {
+  if (!Number.isFinite(position.avgCost) || position.avgCost <= 0) return null;
+  return position.beginQty * position.avgCost;
+}
+
+function quantityTolerance(quantity: number) {
+  return Math.max(1e-6, Math.abs(quantity) * 1e-6);
+}
+
+function priorTradeQuantityBeforeStatement(raw: LongbridgeRawData, position: PortfolioRecord) {
+  const statementMonth = portfolioStatementMonth(position);
+  if (!statementMonth) return 0;
+  const cutoffDate = `${statementMonth}-01`;
+
+  return raw.trades
+    .filter((trade) => isSameSecurity(position, trade) && normalizeDate(trade.tradeDate) < cutoffDate)
+    .sort(compareStockTrades)
+    .reduce((quantity, trade) => {
+      if (isBuySide(trade.side)) return quantity + trade.quantity;
+      if (isSellSide(trade.side)) return Math.max(0, quantity - trade.quantity);
+      return quantity;
+    }, 0);
+}
+
+function hasEarlierTradeCoverage(raw: LongbridgeRawData, position: PortfolioRecord) {
+  return priorTradeQuantityBeforeStatement(raw, position) + quantityTolerance(position.beginQty) >= position.beginQty;
+}
+
+function isTransferInMove(move: Pick<PositionMoveRecord, "moveType" | "note">) {
+  const moveType = canonicalText(move.moveType);
+  const note = canonicalText(move.note);
+  return moveType.includes("证券转入") || moveType.includes("股票进账") || (moveType.includes("进账") && note.includes("账户迁移"));
+}
+
+function isTransferOutMove(move: Pick<PositionMoveRecord, "moveType" | "note">) {
+  const moveType = canonicalText(move.moveType);
+  const note = canonicalText(move.note);
+  return moveType.includes("证券转出") || moveType.includes("股票出账") || (moveType.includes("出账") && note.includes("账户迁移"));
+}
+
+function priorMoveQuantityBeforeStatement(raw: LongbridgeRawData, position: PortfolioRecord) {
+  const statementMonth = portfolioStatementMonth(position);
+  if (!statementMonth) return 0;
+  const cutoffDate = `${statementMonth}-01`;
+  const key = securityPositionKey(position.currency, position.code);
+
+  return raw.moves
+    .filter((move) => {
+      const moveType = canonicalText(move.moveType);
+      return (
+        normalizeDate(move.date) < cutoffDate &&
+        securityPositionKey(position.currency, move.code) === key &&
+        move.quantity > 0 &&
+        (isTransferInMove(move) || moveType.includes("中签"))
+      );
+    })
+    .sort((a, b) => normalizeDate(a.date).localeCompare(normalizeDate(b.date)))
+    .reduce((quantity, move) => quantity + move.quantity, 0);
+}
+
+function hasEarlierMoveCoverage(raw: LongbridgeRawData, position: PortfolioRecord) {
+  return priorMoveQuantityBeforeStatement(raw, position) + quantityTolerance(position.beginQty) >= position.beginQty;
+}
+
+function isOpeningPositionAlreadyCovered(raw: LongbridgeRawData, position: PortfolioRecord) {
+  const coveredQuantity = priorTradeQuantityBeforeStatement(raw, position) + priorMoveQuantityBeforeStatement(raw, position);
+  return coveredQuantity + quantityTolerance(position.beginQty) >= position.beginQty;
+}
+
+function deriveOpeningCostFromStatement(raw: LongbridgeRawData, position: PortfolioRecord) {
+  const fallback = fallbackOpeningCost(position);
+  const statementMonth = portfolioStatementMonth(position);
+  if (!statementMonth || position.beginQty <= 0) return fallback;
+  if (!Number.isFinite(position.avgCost) || position.avgCost <= 0 || position.endQty <= 0) return fallback;
+
+  const monthTrades = raw.trades
+    .filter((trade) => isSameSecurity(position, trade) && normalizedStatementMonth(trade.tradeDate) === statementMonth)
+    .sort(compareStockTrades);
+
+  if (monthTrades.length === 0) return position.endQty > 0 ? position.endQty * position.avgCost : fallback;
+
+  let quantity = position.beginQty;
+  let openingCostFactor = 1;
+  let fixedCost = 0;
+
+  for (const trade of monthTrades) {
+    if (isBuySide(trade.side)) {
+      quantity += trade.quantity;
+      fixedCost += Math.abs(trade.cashChange);
+      continue;
+    }
+
+    if (!isSellSide(trade.side)) continue;
+    if (quantity <= 1e-8 || trade.quantity > quantity + 1e-7) return fallback;
+
+    const remainingRatio = Math.max(0, (quantity - trade.quantity) / quantity);
+    openingCostFactor *= remainingRatio;
+    fixedCost *= remainingRatio;
+    quantity -= trade.quantity;
+  }
+
+  if (Math.abs(quantity - position.endQty) > Math.max(1e-6, Math.abs(position.endQty) * 1e-6)) return fallback;
+  if (Math.abs(openingCostFactor) < 1e-9) return fallback;
+
+  const targetEndingCost = position.endQty * position.avgCost;
+  const openingCost = (targetEndingCost - fixedCost) / openingCostFactor;
+  return Number.isFinite(openingCost) && openingCost > 0 ? openingCost : fallback;
+}
+
+function buildOpeningPositionEvents(raw: LongbridgeRawData, startSequence: number) {
+  const sellKeys = new Set(raw.trades.filter((trade) => isSellSide(trade.side)).map((trade) => securityPositionKey(trade.currency, trade.code)));
+  const earliestPositions = new Map<string, PortfolioRecord>();
+
+  for (const position of raw.positions) {
+    if (position.beginQty <= 0 || !sellKeys.has(securityPositionKey(position.currency, position.code))) continue;
+    const key = securityPositionKey(position.currency, position.code);
+    const existing = earliestPositions.get(key);
+    if (!existing || portfolioStatementMonth(position) < portfolioStatementMonth(existing)) {
+      earliestPositions.set(key, position);
+    }
+  }
+
+  const events: EventRecord[] = [];
+  const issues: ReviewIssue[] = [];
+  let sequence = startSequence;
+  let estimatedCount = 0;
+
+  for (const position of earliestPositions.values()) {
+    if (isOpeningPositionAlreadyCovered(raw, position)) continue;
+    const cost = deriveOpeningCostFromStatement(raw, position);
+    if (cost === null || cost <= 0) continue;
+    const statementMonth = portfolioStatementMonth(position);
+    events.push({
+      kind: "transfer_in",
+      date: `${statementMonth || "2000-01"}-01`,
+      rank: 1,
+      sequence,
+      market: position.market,
+      currency: position.currency,
+      code: position.code,
+      name: position.name,
+      quantity: position.beginQty,
+      cost,
+      source: "月初持仓成本带入",
+      note: `按长桥最早月结单期初持仓和月末成本倒推/暂估；正式申报建议用原始买入或转仓凭证复核。`,
+    });
+    sequence += 1;
+    estimatedCount += 1;
+  }
+
+  if (estimatedCount > 0) {
+    issues.push({
+      id: "longbridge-opening-cost-estimated",
+      severity: "warning",
+      title: "长桥月初持仓成本按月结单暂估",
+      detail: `已为 ${estimatedCount} 个发生卖出的期初持仓带入成本。成本按最早上传月结单的期初数量和月末成本倒推/暂估；正式申报建议用原始买入记录或转仓凭证复核。`,
+    });
+  }
+
+  return { events, issues, nextSequence: sequence };
+}
+
+function isStockSplitMove(move: PositionMoveRecord) {
+  const moveType = canonicalText(move.moveType);
+  const note = canonicalText(move.note).toLowerCase();
+  return moveType.includes("公司行动") && moveType.includes("股票") && note.includes("stock split");
+}
+
+function stockSplitMoveKey(move: PositionMoveRecord) {
+  return [
+    move.sourcePdf,
+    move.date,
+    normalizeCode(move.code),
+    canonicalText(move.note).toLowerCase().replace(/\s+/g, " "),
+  ].join("::");
+}
+
+function stockSplitRatioFromNote(note: string) {
+  const match = canonicalText(note).match(/Stock Split Amount:\s*([\d.]+)\s*for\s*([\d.]+)/i);
+  if (!match) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || numerator <= 0 || denominator <= 0) return null;
+  return numerator / denominator;
+}
+
+function stockSplitSymbolFromNote(note: string) {
+  const text = canonicalText(note).toUpperCase();
+  const equityMatch = text.match(/\b([A-Z]{1,6})\s+US\s+EQUITY\b/);
+  if (equityMatch) return normalizeCode(equityMatch[1]);
+  const dottedMatch = text.match(/\b([A-Z]{1,6})\.US\b/);
+  if (dottedMatch) return normalizeCode(dottedMatch[1]);
+  return null;
+}
+
+function stockSplitCashForMove(cashFlows: CashFlowRecord[], move: PositionMoveRecord) {
+  const code = normalizeCode(move.code);
+  const moveDate = normalizeDate(move.date);
+  return cashFlows
+    .filter((cashFlow) => {
+      const note = canonicalText(cashFlow.note).toLowerCase();
+      return (
+        cashFlow.amount > 0 &&
+        normalizeDate(cashFlow.date) >= moveDate &&
+        note.includes("stock split") &&
+        stockSplitSymbolFromNote(cashFlow.note) === code
+      );
+    })
+    .sort((a, b) => normalizeDate(a.date).localeCompare(normalizeDate(b.date)))[0];
+}
+
+function inferStockSplitEffectiveDate(raw: LongbridgeRawData, move: PositionMoveRecord, ratio: number) {
+  const moveDate = normalizeDate(move.date);
+  const code = normalizeCode(move.code);
+  const expectedPriceRatio = ratio > 0 ? 1 / ratio : 0;
+  if (!Number.isFinite(expectedPriceRatio) || expectedPriceRatio <= 0) return moveDate;
+
+  const sameSymbolTrades = raw.trades
+    .filter((trade) => normalizeCode(trade.code) === code && normalizeDate(trade.tradeDate) <= moveDate)
+    .sort((a, b) => {
+      return (
+        normalizeDate(a.tradeDate).localeCompare(normalizeDate(b.tradeDate)) ||
+        (a.tradeTime ?? "99:99:99").localeCompare(b.tradeTime ?? "99:99:99") ||
+        a.sequence - b.sequence
+      );
+    });
+
+  let previous: StockTradeRecord | null = null;
+  for (const trade of sameSymbolTrades) {
+    if (previous && previous.avgPrice > 0 && trade.avgPrice > 0) {
+      const actualPriceRatio = trade.avgPrice / previous.avgPrice;
+      const threshold = Math.sqrt(expectedPriceRatio);
+      if (expectedPriceRatio >= 2 && actualPriceRatio >= threshold) return normalizeDate(trade.tradeDate);
+      if (expectedPriceRatio <= 0.5 && actualPriceRatio <= threshold) return normalizeDate(trade.tradeDate);
+    }
+    previous = trade;
+  }
+
+  return moveDate;
+}
+
+function buildStockSplitEvents(raw: LongbridgeRawData, startSequence: number) {
+  const groups = new Map<string, PositionMoveRecord[]>();
+  for (const move of raw.moves) {
+    if (!isStockSplitMove(move)) continue;
+    const group = groups.get(stockSplitMoveKey(move)) ?? [];
+    group.push(move);
+    groups.set(stockSplitMoveKey(move), group);
+  }
+
+  const events: EventRecord[] = [];
+  const issues: ReviewIssue[] = [];
+  const consumed = new Set<PositionMoveRecord>();
+  let sequence = startSequence;
+
+  for (const moves of groups.values()) {
+    const outMove = moves.find((move) => move.quantity < 0 || canonicalText(move.moveType).includes("出账"));
+    const inMove = moves.find((move) => move.quantity > 0 || canonicalText(move.moveType).includes("进账"));
+    if (!outMove || !inMove) continue;
+
+    consumed.add(outMove);
+    consumed.add(inMove);
+
+    const splitFromQuantity = Math.abs(outMove.quantity);
+    const splitToQuantity = Math.abs(inMove.quantity);
+    if (splitFromQuantity <= 0 || splitToQuantity <= 0) continue;
+
+    const inferred = inferTradeMarket(inMove.code, {
+      code: inMove.code,
+      name: inMove.name,
+      codeResolution: "explicit",
+    });
+    const splitRatio = stockSplitRatioFromNote(inMove.note || outMove.note) ?? splitToQuantity / splitFromQuantity;
+    const cashFlow = stockSplitCashForMove(raw.cashFlows, inMove);
+    const actionLabel = stockSplitActionLabel(splitRatio);
+
+    events.push({
+      kind: "stock_split",
+      date: inferStockSplitEffectiveDate(raw, inMove, splitRatio),
+      rank: 1.5,
+      sequence,
+      market: inMove.market || outMove.market || inferred.market,
+      currency: inferred.currency,
+      code: inMove.code,
+      name: inMove.name,
+      quantity: splitToQuantity,
+      splitRatio,
+      splitFromQuantity,
+      splitToQuantity,
+      cashInLieu: cashFlow?.amount,
+      source: "公司行动股票出入账",
+      note: `${actionLabel}：${formatQuantity(splitFromQuantity)} 股 -> ${formatQuantity(splitToQuantity)} 股${
+        cashFlow ? `；碎股现金 ${inferred.currency} ${formatQuantity(cashFlow.amount)}` : ""
+      }；${inMove.note || outMove.note}`,
+    });
+    issues.push({
+      id: `${inMove.sourcePdf}-${inMove.code}-${inMove.date}-stock-split`,
+      severity: "info",
+      title: `${displayCode(inMove.code)} 已识别${actionLabel}`,
+      detail: `已按公司行动将 ${formatQuantity(splitFromQuantity)} 股折算为 ${formatQuantity(splitToQuantity)} 股，并保留原持仓总成本。${
+        cashFlow
+          ? `检测到碎股现金 ${inferred.currency} ${formatQuantity(cashFlow.amount)}；当拆合股前持仓成本可追踪时，系统会按碎股处置收入参与成本重放。`
+          : ""
+      }`,
+      source: inMove.sourcePdf,
+    });
+    sequence += 1;
+  }
+
+  return { events, issues, consumed, nextSequence: sequence };
+}
+
+function activityAmount(event: EventRecord) {
+  if ("cash" in event) return event.kind === "buy" ? -event.cash : event.cash;
+  if (event.kind === "transfer_out" || event.kind === "stock_split") return 0;
+  return event.cost;
+}
+
+function buildTradeActivities(events: EventRecord[]): TradeActivity[] {
+  return events.map((event) => ({
+    id: `longbridge-activity-${event.date}-${event.sequence}-${displayCode(event.code)}-${event.kind}`,
+    broker: "长桥",
+    date: event.date,
+    time: "time" in event ? event.time : undefined,
+    sequence: event.sequence,
+    market: event.market,
+    currency: event.currency,
+    symbol: displayCode(event.code),
+    securityName: event.name,
+    side: event.kind,
+    quantity: event.quantity,
+    unitPrice: "unitPrice" in event ? event.unitPrice : undefined,
+    grossAmount: "grossAmount" in event ? event.grossAmount : undefined,
+    fee: "fee" in event ? event.fee : undefined,
+    amount: activityAmount(event),
+    splitRatio: "splitRatio" in event ? event.splitRatio : undefined,
+    splitFromQuantity: "splitFromQuantity" in event ? event.splitFromQuantity : undefined,
+    splitToQuantity: "splitToQuantity" in event ? event.splitToQuantity : undefined,
+    cashInLieu: "cashInLieu" in event ? event.cashInLieu : undefined,
+    source: event.source,
+    note: event.note,
+  }));
+}
+
+function buildRealizedTrades(
+  raw: LongbridgeRawData,
+  targetYear?: number,
+  manualCosts: ManualCostInput[] = [],
+): {
+  trades: RealizedTrade[];
+  issues: ReviewIssue[];
+  activities: TradeActivity[];
+  costBasisRequests: CostBasisRequest[];
+} {
+  const issues: ReviewIssue[] = [];
+  const missingCost = new Map<string, MissingCostAggregate>();
+  const manualCostsById = manualCostMap(manualCosts);
+  const allottedCodes = new Set(
+    raw.moves.filter((move) => canonicalText(move.moveType).includes("中签")).map((move) => normalizeCode(move.code)),
+  );
+
+  const ipoCostByCode = new Map<string, number>();
+  for (const cashFlow of raw.cashFlows) {
+    const flowType = canonicalText(cashFlow.flowType);
+    const code = extractIpoCode(cashFlow.note);
+    if (!code || !allottedCodes.has(code)) continue;
+    if (flowType.includes("新股中签款扣除") || flowType.includes("新股认购")) {
+      ipoCostByCode.set(code, (ipoCostByCode.get(code) ?? 0) + Math.abs(cashFlow.amount));
+    }
+  }
+
+  const portfolioLookup = new Map<string, PortfolioRecord>();
+  for (const position of raw.positions) {
+    portfolioLookup.set(`${position.sourcePdf}::${position.code}`, position);
+  }
+
+  const events: EventRecord[] = [];
+  let sequence = 0;
+
+  const openingEvents = buildOpeningPositionEvents(raw, sequence);
+  events.push(...openingEvents.events);
+  issues.push(...openingEvents.issues);
+  sequence = openingEvents.nextSequence;
+
+  const stockSplitEvents = buildStockSplitEvents(raw, sequence);
+  events.push(...stockSplitEvents.events);
+  issues.push(...stockSplitEvents.issues);
+  sequence = stockSplitEvents.nextSequence;
+
+  for (const move of raw.moves) {
+    if (stockSplitEvents.consumed.has(move)) continue;
+    const moveType = canonicalText(move.moveType);
+    if (moveType.includes("中签")) {
+      events.push({
+        kind: "acquire",
+        date: normalizeDate(move.date),
+                rank: 1,
+                sequence,
+                market: move.market,
+                currency: "HKD",
+                code: move.code,
+                name: move.name,
+                quantity: move.quantity,
+                cost: ipoCostByCode.get(normalizeCode(move.code)) ?? 0,
+                source: "IPO中签扣款+申购手续费",
+                note: move.note,
+              });
+      sequence += 1;
+    } else if (isTransferInMove(move)) {
+      const position = portfolioLookup.get(`${move.sourcePdf}::${move.code}`);
+      events.push({
+        kind: "transfer_in",
+        date: normalizeDate(move.date),
+        rank: 1,
+        sequence,
+        market: move.market,
+        currency: position?.currency ?? "USD",
+        code: move.code,
+        name: move.name,
+        quantity: move.quantity,
+        cost: move.quantity * (position?.avgCost ?? 0),
+        source: `${move.moveType}-按长桥月末成本基准`,
+        note: `${move.note ? `${move.note}；` : ""}转入成本需用原券商成本凭证复核`,
+      });
+      issues.push({
+        id: `${move.sourcePdf}-${move.code}-transfer-in`,
+        severity: "warning",
+        title: `标的 ${displayCode(move.code)} 在 ${displayChineseDate(move.date)} 存在转仓`,
+        detail: "已经按照券商月结单暂估，正式申报时建议用转出券商原始成本凭证确认。",
+        source: move.sourcePdf,
+      });
+      sequence += 1;
+    } else if (isTransferOutMove(move)) {
+      const position = portfolioLookup.get(`${move.sourcePdf}::${move.code}`);
+      events.push({
+        kind: "transfer_out",
+        date: normalizeDate(move.date),
+        rank: 3,
+        sequence,
+        market: move.market,
+        currency: position?.currency ?? "USD",
+        code: move.code,
+        name: move.name,
+        quantity: Math.abs(move.quantity),
+        source: move.moveType,
+        note: `${move.note ? `${move.note}；` : ""}转仓，不按卖出确认收益`,
+      });
+      issues.push({
+        id: `${move.sourcePdf}-${move.code}-transfer-out`,
+        severity: "warning",
+        title: `${displayCode(move.code)} ${move.moveType}，未在长桥实现卖出`,
+        detail: "证券转出不按卖出确认收益；如果转出后在其他券商卖出，需要继续接入该券商记录。",
+        source: move.sourcePdf,
+      });
+      sequence += 1;
+    }
+  }
+
+  for (const trade of raw.trades) {
+    const isBuy = isBuySide(trade.side);
+    const isSell = isSellSide(trade.side);
+    if (!isBuy && !isSell) continue;
+    events.push({
+      kind: isBuy ? "buy" : "sell",
+      date: normalizeDate(trade.tradeDate),
+      rank: 2,
+      sequence: trade.sequence + sequence,
+      time: trade.tradeTime ?? ORDER_TIME_OVERRIDE[trade.orderId] ?? "99:99:99",
+      market: trade.market,
+      currency: trade.currency,
+      code: trade.code,
+      name: trade.name,
+      quantity: trade.quantity,
+      unitPrice: trade.avgPrice,
+      grossAmount: trade.tradeAmount,
+      fee: Math.abs(Math.abs(trade.cashChange) - Math.abs(trade.tradeAmount)),
+      cash: trade.cashChange,
+      source: "股票交易流水",
+      note: trade.orderId,
+    });
+  }
+
+  events.sort((a, b) => {
+    return (
+      a.date.localeCompare(b.date) ||
+      a.rank - b.rank ||
+      ("time" in a ? a.time : "99:99:99").localeCompare("time" in b ? b.time : "99:99:99") ||
+      a.sequence - b.sequence
+    );
+  });
+
+  const states = new Map<string, PositionState>();
+  const realizedTrades: RealizedTrade[] = [];
+  const futureBuyUsages = new Map<string, { quantity: number; costBasis: number }>();
+
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const event = events[eventIndex];
+    const key = eventSecurityKey(event);
+    const state = states.get(key) ?? {
+      market: event.market,
+      currency: event.currency,
+      name: event.name,
+      quantity: 0,
+      costBasis: 0,
+    };
+    state.market = event.market || state.market;
+    state.currency = event.currency || state.currency;
+    state.name = event.name || state.name;
+
+    if (event.kind === "stock_split") {
+      state.quantity *= event.splitRatio;
+      const fractionalQuantity = Math.max(0, state.quantity - event.splitToQuantity);
+      if (fractionalQuantity > 1e-8 && event.cashInLieu && event.cashInLieu > 0) {
+        const costBasis = fractionalQuantity * stateAvgCost(state);
+        if (targetYear === undefined || event.date.startsWith(String(targetYear))) {
+          realizedTrades.push({
+            id: `longbridge-${event.date}-${event.sequence}-${event.code}-stock-split-cash-in-lieu`,
+            broker: "长桥",
+            sellDate: event.date,
+            sequence: event.sequence,
+            market: event.market,
+            currency: event.currency,
+            symbol: displayCode(event.code),
+            securityName: event.name,
+            quantity: fractionalQuantity,
+            proceeds: event.cashInLieu,
+            costBasis,
+            gainLoss: event.cashInLieu - costBasis,
+            source: event.source,
+            note: `${event.note}；拆合股碎股现金结算。`,
+          });
+        }
+        state.quantity -= fractionalQuantity;
+        state.costBasis -= costBasis;
+      }
+      if (Math.abs(state.quantity - event.splitToQuantity) <= 1e-6) {
+        state.quantity = event.splitToQuantity;
+      }
+    } else if (event.kind === "acquire" || event.kind === "transfer_in") {
+      state.quantity += event.quantity;
+      state.costBasis += event.cost;
+    } else if (event.kind === "buy") {
+      const usedByEarlierSell = futureBuyUsages.get(eventUsageKey(event)) ?? { quantity: 0, costBasis: 0 };
+      const remainingQuantity = Math.max(0, event.quantity - usedByEarlierSell.quantity);
+      const remainingCostBasis = Math.max(0, -event.cash - usedByEarlierSell.costBasis);
+      if (remainingQuantity > 1e-8) {
+        state.quantity += remainingQuantity;
+        state.costBasis += remainingCostBasis;
+      }
+    } else if (event.kind === "sell") {
+      let borrowedCostForSell: { quantity: number; costBasis: number } | null = null;
+      if (state.quantity + 1e-7 < event.quantity) {
+        const shortage = event.quantity - state.quantity;
+        borrowedCostForSell = borrowLaterSameDayBuyCost(events, eventIndex, event, shortage, futureBuyUsages);
+        if (borrowedCostForSell) {
+          state.quantity += borrowedCostForSell.quantity;
+          state.costBasis += borrowedCostForSell.costBasis;
+        }
+      }
+
+      if (state.quantity + 1e-7 < event.quantity) {
+        if (targetYear === undefined || event.date.startsWith(String(targetYear))) {
+          const symbol = displayCode(event.code);
+          const missingKey = `${key}::${event.date}::${event.sequence}`;
+          const requestId = `longbridge-cost-${targetYear ?? "unknown"}-${event.currency}-${symbol}-${event.date}-${event.sequence}`;
+          missingCost.set(missingKey, {
+            id: requestId,
+            broker: "长桥",
+            sellDate: event.date,
+            market: event.market,
+            currency: event.currency,
+            symbol,
+            securityName: event.name,
+            quantity: event.quantity,
+            proceeds: event.cash,
+            trackedQuantity: state.quantity,
+            source: event.source,
+            note: "手动补录这笔成本后计入资本利得",
+            sales: [
+              {
+                date: event.date,
+                time: event.time,
+                sequence: event.sequence,
+                market: event.market,
+                currency: event.currency,
+                symbol,
+                securityName: event.name,
+                quantity: event.quantity,
+                proceeds: event.cash,
+                source: event.source,
+                note: event.note,
+              },
+            ],
+          });
+        }
+        state.quantity = 0;
+        state.costBasis = 0;
+        states.set(key, state);
+        continue;
+      }
+      const costBasis = event.quantity * stateAvgCost(state);
+      const gainLoss = event.cash - costBasis;
+      const trade: RealizedTrade = {
+        id: `longbridge-${event.date}-${event.sequence}-${event.code}-${event.note}`,
+        broker: "长桥",
+        sellDate: event.date,
+        time: event.time,
+        sequence: event.sequence,
+        market: event.market,
+        currency: event.currency,
+        symbol: displayCode(event.code),
+        securityName: event.name,
+        quantity: event.quantity,
+        proceeds: event.cash,
+        costBasis,
+        gainLoss,
+        source: event.source,
+        note: borrowedCostForSell
+          ? `${event.note}；长桥月结单同日成交顺序异常，已用同日后续买入 ${formatQuantity(
+              borrowedCostForSell.quantity,
+            )} 股成本回补。`
+          : event.note,
+      };
+      realizedTrades.push(trade);
+      state.quantity -= event.quantity;
+      state.costBasis -= costBasis;
+      if (Math.abs(state.quantity) < 1e-8) {
+        state.quantity = 0;
+        state.costBasis = 0;
+      }
+    } else if (event.kind === "transfer_out") {
+      const costBasis = event.quantity * stateAvgCost(state);
+      state.quantity -= event.quantity;
+      state.costBasis -= costBasis;
+      if (Math.abs(state.quantity) < 1e-8) {
+        state.quantity = 0;
+        state.costBasis = 0;
+      }
+    }
+
+    states.set(key, state);
+  }
+
+  const costBasisRequests: CostBasisRequest[] = [];
+
+  for (const item of missingCost.values()) {
+    const manualCostBasis = manualCostsById.get(item.id);
+    if (manualCostBasis !== undefined) {
+      let allocatedCost = 0;
+      item.sales.forEach((sale, index) => {
+        const costBasis =
+          index === item.sales.length - 1
+            ? manualCostBasis - allocatedCost
+            : (manualCostBasis * sale.quantity) / item.quantity;
+        allocatedCost += costBasis;
+        realizedTrades.push({
+          id: `${item.id}-${sale.date}-${sale.sequence}-manual`,
+          broker: item.broker,
+          sellDate: sale.date,
+          time: sale.time,
+          sequence: sale.sequence,
+          market: sale.market,
+          currency: sale.currency,
+          symbol: sale.symbol,
+          securityName: sale.securityName,
+          quantity: sale.quantity,
+          proceeds: sale.proceeds,
+          costBasis,
+          gainLoss: sale.proceeds - costBasis,
+          source: sale.source,
+          note: `用户手动补录这笔卖出总成本：${manualCostBasis}`,
+          useBrokerReportedGainLoss: true,
+        });
+      });
+      continue;
+    }
+
+    costBasisRequests.push({
+      id: item.id,
+      broker: item.broker,
+      sellDate: item.sellDate,
+      time: item.sales[0]?.time,
+      sequence: item.sales[0]?.sequence,
+      market: item.market,
+      currency: item.currency,
+      symbol: item.symbol,
+      securityName: item.securityName,
+      quantity: item.quantity,
+      trackedQuantity: item.trackedQuantity,
+      proceeds: item.proceeds,
+      source: item.source,
+      note: item.note,
+    });
+    issues.push({
+      id: `${item.id}-cost-gap`,
+      severity: "warning",
+      title: `${item.symbol} 历史成本缺失`,
+      detail: `${item.sellDate} 卖出 ${item.quantity} 股，但上传文件中最多只追踪到 ${item.trackedQuantity} 股成本；这笔卖出未计入资本利得，需要补充更早年度记录或手动在 **盈亏明细-待补成本** 中添加成本。`,
+      source: item.source,
+    });
+  }
+
+  return { trades: realizedTrades, issues, activities: buildTradeActivities(events), costBasisRequests };
+}
+
+function portfolioStatementMonth(position: PortfolioRecord) {
+  const statementMonth = position.sourcePdf.match(/(20\d{2})[-_年.]?(0[1-9]|1[0-2])/);
+  return position.statementMonth ?? (statementMonth ? `${statementMonth[1]}-${statementMonth[2]}` : "");
+}
+
+function buildOpenPositions(raw: LongbridgeRawData): OpenPosition[] {
+  const latestByCode = new Map<string, PortfolioRecord>();
+  for (const position of raw.positions) {
+    const market = canonicalText(position.market);
+    if (market !== "香港市场" && market !== "美国市场") continue;
+    const key = `${position.currency}::${position.code}`;
+    const existing = latestByCode.get(key);
+    if (!existing || portfolioStatementMonth(position) >= portfolioStatementMonth(existing)) {
+      latestByCode.set(key, position);
+    }
+  }
+
+  return Array.from(latestByCode.values())
+    .filter((position) => position.endQty > 0)
+    .map((position) => {
+      const statementMonth = position.sourcePdf.match(/(20\d{2})[-_年.]?(0[1-9]|1[0-2])/);
+      const asOfMonth = position.statementMonth ?? (statementMonth ? `${statementMonth[1]}-${statementMonth[2]}` : "");
+      return {
+        id: `longbridge-open-${position.currency}-${position.code}`,
+        broker: "长桥",
+        asOf: asOfMonth ? `${asOfMonth}-末` : "",
+        market: canonicalText(position.market),
+        currency: position.currency,
+        symbol: displayCode(position.code),
+        securityName: position.name,
+        quantity: position.endQty,
+        marketValue: position.marketValue,
+        costBasis: position.endQty * position.avgCost,
+        unrealizedGainLoss: position.unrealizedGainLoss,
+        source: position.sourcePdf,
+      };
+    });
+}
+
+async function parseLongbridgeInputs(
+  files: LongbridgeFileInput[],
+  password?: string,
+  options: { targetYear?: number; manualCosts?: ManualCostInput[]; securityAliases?: ManualSecurityAliasInput[] } = {},
+): Promise<ParsedInput> {
+  const parsed = emptyParsedInput();
+  const raw: LongbridgeRawData = {
+    trades: [],
+    cashFlows: [],
+    moves: [],
+    positions: [],
+    issues: [],
+    statementDetected: false,
+  };
+  const ledgerActivities: TradeActivity[] = [];
+
+  for (const file of files) {
+    try {
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        const workbook = XLSX.read(file.data, { type: "array", cellDates: false });
+        const workbookData = parseLongbridgeStockLedgerWorkbook(file.name, workbook);
+        ledgerActivities.push(...workbookData.activities);
+        raw.issues.push(...workbookData.issues);
+        raw.statementDetected = raw.statementDetected || workbookData.statementDetected;
+      } else {
+        const lines = await extractPdfLines(file.name, file.data, password);
+        const fileRaw = parseLongbridgeLines(file.name, lines, options.securityAliases ?? []);
+        await attachDividendScreenshots(file.name, file.data, password, fileRaw.cashFlows);
+        raw.trades.push(...fileRaw.trades);
+        raw.cashFlows.push(...fileRaw.cashFlows);
+        raw.moves.push(...fileRaw.moves);
+        raw.positions.push(...fileRaw.positions);
+        raw.issues.push(...fileRaw.issues);
+        raw.statementDetected = raw.statementDetected || fileRaw.statementDetected;
+      }
+    } catch (error) {
+      raw.issues.push({
+        id: /\.(xlsx|xls)$/i.test(file.name) ? `${file.name}-xlsx-error` : `${file.name}-pdf-error`,
+        severity: "blocking",
+        title: /\.(xlsx|xls)$/i.test(file.name) ? "长桥Excel解析失败" : "长桥PDF解析失败",
+        detail: error instanceof Error ? error.message : "未知解析错误。请确认文件格式是否正确。",
+        source: file.name,
+      });
+    }
+  }
+
+  const realized = buildRealizedTrades(raw, options.targetYear, options.manualCosts ?? []);
+  parsed.realizedTrades.push(...realized.trades);
+  parsed.tradeActivities.push(...realized.activities, ...ledgerActivities);
+  parsed.dividends.push(...buildDividends(raw.cashFlows));
+  parsed.openPositions.push(...buildOpenPositions(raw));
+  parsed.issues.push(...raw.issues, ...realized.issues);
+  parsed.costBasisRequests.push(...realized.costBasisRequests);
+
+  const hasParsedStatementRows =
+    raw.trades.length > 0 ||
+    raw.cashFlows.length > 0 ||
+    raw.moves.length > 0 ||
+    raw.positions.length > 0 ||
+    ledgerActivities.length > 0;
+  const hasRecognizedStatement = raw.statementDetected || hasParsedStatementRows;
+
+  if (!hasParsedStatementRows && !hasRecognizedStatement && files.length > 0) {
+    parsed.issues.push({
+      id: "longbridge-invalid-format",
+      severity: "blocking",
+      title: "长桥文件格式不符合要求",
+      detail: "长桥支持 PDF 月结单和股票账户明细 Excel。当前文件没有识别到账户流水、股票交易、持仓或资产进出表，请确认上传的是受支持的长桥文件。",
+    });
+  }
+
+  if (raw.trades.length === 0 && ledgerActivities.length === 0 && files.length > 0) {
+    parsed.issues.push({
+      id: hasRecognizedStatement ? "longbridge-no-stock-activity" : "longbridge-no-trades",
+      severity: hasRecognizedStatement ? "info" : "warning",
+      title: hasRecognizedStatement ? "本月没有长桥股票交易" : "未识别长桥股票交易",
+      detail: hasRecognizedStatement
+        ? "已识别为长桥综合账户月结单，但本月没有股票买卖记录。系统会按无股票交易处理，现金入金、出金或账户余额变化不会形成已实现资本利得；如本月实际发生卖出，请重新下载包含股票交易明细的月结单后再上传。"
+        : "没有从上传的长桥 PDF 中识别到股票交易表。请确认文件是否为月结单且密码正确。",
+    });
+  }
+
+  return parsed;
+}
+
+export async function parseLongbridgeFiles(
+  files: LongbridgeFileInput[],
+  password?: string,
+  options: { targetYear?: number; manualCosts?: ManualCostInput[]; securityAliases?: ManualSecurityAliasInput[] } = {},
+): Promise<ParsedInput> {
+  return parseLongbridgeInputs(files, password, options);
+}
+
+export async function parseLongbridgePdfs(
+  files: LongbridgeFileInput[],
+  password?: string,
+  options: { targetYear?: number; manualCosts?: ManualCostInput[]; securityAliases?: ManualSecurityAliasInput[] } = {},
+): Promise<ParsedInput> {
+  return parseLongbridgeInputs(files, password, options);
+}

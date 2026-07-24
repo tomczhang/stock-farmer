@@ -1,0 +1,36 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - MAIL_FROM=${MAIL_FROM}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - FX_HKD_USD=${FX_HKD_USD:-0.1282}
+      - FX_CNY_USD=${FX_CNY_USD:-0.1395}
+    volumes:
+      - app-data:/data
+    expose:
+      - "8790"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:
