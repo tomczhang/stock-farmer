@@ -29,6 +29,8 @@ interface SummaryLike {
     gainLossRatio: number | null;
     idleCash: number;
   };
+  pnl: { tradingFees: number };
+  coverage: { status: string; missing: string[] };
   allocation: {
     bySymbol: Array<{ name: string; value: number }>;
     byBucket: Array<{ name: string; value: number }>;
@@ -51,8 +53,8 @@ async function getSummary(ctx: ReturnType<typeof createTestApp>, cookie: string)
   return (await res.json()) as SummaryLike;
 }
 
-describe("交易流水与净成本", () => {
-  it("手动交易净成本覆盖月结单成本（100 买入 + 200 卖出 → 净成本 -100）", async () => {
+describe("账面成本与交易现金流分离", () => {
+  it("部分手工交易绝不覆盖月结单账面成本", async () => {
     const ctx = createTestApp();
     const { cookie } = await registerAndLogin(ctx);
     await ctx.app.request("/api/statements", authedJson(cookie, STATEMENT));
@@ -87,15 +89,14 @@ describe("交易流水与净成本", () => {
     );
     const summary = await getSummary(ctx, cookie);
     const aapl = summary.positions.find((p) => p.symbol === "AAPL")!;
-    expect(aapl.effectiveCost).toBe(-100);
-    expect(aapl.costSource).toBe("trades");
-    expect(summary.kpi.totalCost).toBe(-100);
-    // 盈亏 = 市值 21000 - (-100) = 21100
-    expect(summary.kpi.gainLoss).toBeCloseTo(21100, 1);
-    expect(summary.kpi.gainLossRatio).toBeNull(); // 成本 ≤ 0 时不给比率
+    expect(aapl.effectiveCost).toBe(18000);
+    expect(aapl.costSource).toBe("statement");
+    expect(summary.kpi.totalCost).toBe(18000);
+    expect(summary.kpi.gainLoss).toBeCloseTo(3000, 1);
+    expect(summary.kpi.gainLossRatio).toBeCloseTo(3000 / 18000, 4);
   });
 
-  it("手续费计入净成本", async () => {
+  it("只有交易的持仓成本未知，手续费只进入盈亏费用", async () => {
     const ctx = createTestApp();
     const { cookie } = await registerAndLogin(ctx);
     await ctx.app.request(
@@ -114,7 +115,11 @@ describe("交易流水与净成本", () => {
     );
     const summary = await getSummary(ctx, cookie);
     const tsla = summary.positions.find((p) => p.symbol === "TSLA")!;
-    expect(tsla.effectiveCost).toBe(1005); // 1000 + 5 手续费
+    expect(tsla.effectiveCost).toBeNull();
+    expect(tsla.costSource).toBe("none");
+    expect(summary.pnl.tradingFees).toBe(5);
+    expect(summary.coverage.status).not.toBe("complete");
+    expect(summary.coverage.missing).toContain("book_cost:US:TSLA");
   });
 
   it("纯手动交易可建立持仓（快照中不存在的标的）", async () => {
@@ -138,7 +143,7 @@ describe("交易流水与净成本", () => {
     const summary = await getSummary(ctx, cookie);
     const tencent = summary.positions.find((p) => p.symbol === "00700")!;
     expect(tencent.quantity).toBe(100);
-    expect(tencent.effectiveCost).toBe(40100);
+    expect(tencent.effectiveCost).toBeNull();
     expect(tencent.marketValue).toBe(40000); // 100 × 最后成交价 400
   });
 

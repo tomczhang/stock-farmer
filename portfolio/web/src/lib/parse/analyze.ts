@@ -12,7 +12,14 @@ import { parseTigerPdfs } from "@/lib/parsers/tiger";
 import { parseUsmartPdfs } from "@/lib/parsers/usmart";
 import { parseZirconPdfs } from "@/lib/parsers/zircon";
 import { ParserValidationError } from "@/lib/parsers/common";
-import type { OpenPosition, ParsedInput, ReviewIssue } from "@/lib/tax/types";
+import type {
+  DividendIncome,
+  OpenPosition,
+  ParsedInput,
+  RealizedTrade,
+  ReviewIssue,
+  TradeActivity,
+} from "@/lib/tax/types";
 import { extractCashBalances, type ExtractedCash } from "./cash";
 import { extractPdfLines } from "./pdfText";
 
@@ -56,6 +63,9 @@ export const BROKERS: BrokerMeta[] = [
 export interface AnalyzeResult {
   positions: OpenPosition[];
   cashBalances: ExtractedCash[];
+  tradeActivities: TradeActivity[];
+  realizedTrades: RealizedTrade[];
+  dividends: DividendIncome[];
   issues: ReviewIssue[];
   asOf: string;
 }
@@ -157,6 +167,9 @@ export async function analyzeStatementFiles(options: {
   return {
     positions: parsed.openPositions,
     cashBalances,
+    tradeActivities: parsed.tradeActivities,
+    realizedTrades: parsed.realizedTrades,
+    dividends: parsed.dividends,
     issues: parsed.issues,
     asOf,
   };

@@ -1,5 +1,40 @@
 export type Currency = "USD" | "HKD" | "CNY";
 
+export type CoverageStatus = "complete" | "partial" | "missing";
+
+export interface Coverage {
+  status: CoverageStatus;
+  ratio?: number;
+  missing: string[];
+  issues: string[];
+}
+
+export interface PnlBreakdown {
+  realizedCapitalGain: number;
+  unrealizedCapitalGain: number | null;
+  capitalGain: number | null;
+  dividendsGross: number;
+  dividendsNet: number;
+  tradingFees: number;
+  financingFees: number;
+  explainedTotal: number | null;
+  economicTotal: number | null;
+  unexplained: number | null;
+}
+
+export interface InstrumentPnlBreakdown {
+  realizedCapitalGain: number | null;
+  unrealizedCapitalGain: number | null;
+  capitalGain: number | null;
+  dividendsGross: number | null;
+  dividendsNet: number | null;
+  tradingFees: number | null;
+  financingFees: number | null;
+  explainedTotal: number | null;
+  economicTotal: number | null;
+  unexplained: number | null;
+}
+
 export interface Me {
   id: number;
   email: string;
@@ -32,6 +67,47 @@ export interface SummaryPosition {
   valueDisplay: number;
   costDisplay: number | null;
   gainLossDisplay: number | null;
+  holdingRatio?: number;
+  bookCost?: number | null;
+  bookCostSource?: "manual" | "statement" | "none";
+  externalNetInvested?: number | null;
+  pnl?: InstrumentPnlBreakdown;
+  coverage?: Coverage;
+}
+
+export interface SummaryInstrument {
+  key: string;
+  market: string;
+  symbol: string;
+  name: string;
+  brokers: string[];
+  currencies: string[];
+  currency: Currency;
+  positionCount: number;
+  quantity: number;
+  asOf: string;
+  bucket: string;
+  marketValue: number;
+  marketValueDisplay: number;
+  valueDisplay: number;
+  currentPrice: number | null;
+  currentPriceDisplay: number | null;
+  quoteApplied: boolean;
+  effectiveCost: number | null;
+  costDisplay: number | null;
+  bookCost: number | null;
+  bookCostDisplay: number | null;
+  knownBookCost: number;
+  knownBookCostDisplay: number;
+  bookCostSource: "manual" | "statement" | "none" | "mixed";
+  gainLossDisplay: number | null;
+  holdingRatio: number;
+  externalNetInvested: number | null;
+  knownExternalNetInvested: number;
+  externalNetInvestedScope: "instrument_direct_events";
+  capitalCoverage: Coverage;
+  pnl: InstrumentPnlBreakdown;
+  coverage: Coverage;
 }
 
 export interface SummaryCash {
@@ -40,6 +116,8 @@ export interface SummaryCash {
   amount: number;
   source: string;
   asOf: string;
+  /** 货币基金等现金等价物的标识（代码+名称） */
+  label?: string;
   amountDisplay: number;
 }
 
@@ -51,13 +129,16 @@ export interface NamedValue {
 export interface HistoryPoint {
   month: string;
   valueDisplay: number;
-  costDisplay: number;
-  gainLossDisplay: number;
+  costDisplay: number | null;
+  gainLossDisplay: number | null;
   symbolCount: number;
 }
 
 export interface Summary {
   display: Currency;
+  scope?: "all" | "self";
+  /** 授予仓（RSU）概况，与 scope 无关始终返回 */
+  grant?: { count: number; symbols: string[]; valueDisplay: number };
   asOf: Array<{ broker: string; asOf: string }>;
   kpi: {
     totalAssets: number;
@@ -75,18 +156,26 @@ export interface Summary {
     byMarket: NamedValue[];
   };
   positions: SummaryPosition[];
+  instruments?: SummaryInstrument[];
   cash: SummaryCash[];
   radar: NamedValue[];
   history: HistoryPoint[];
   staleQuotes: string[];
+  costs?: {
+    bookCost: number | null;
+    externalNetInvested: number | null;
+  };
+  pnl?: PnlBreakdown;
+  coverage?: Coverage;
 }
 
-export type Bucket = "aggressive" | "defensive" | "stable";
+export type Bucket = "aggressive" | "defensive" | "stable" | "grant";
 
 export const BUCKET_LABELS: Record<string, string> = {
   aggressive: "进取仓",
   defensive: "防守仓",
   stable: "稳健仓",
+  grant: "授予仓",
   unassigned: "未分类",
 };
 
@@ -120,6 +209,10 @@ export interface PlanTier {
   cumulativeShares: number;
   avgCost: number;
   filledAt: string | null;
+  postQuantity?: number | null;
+  postBookCost?: number | null;
+  postAvgCost?: number | null;
+  safety?: SafetyAddResult | null;
 }
 
 export interface Plan {
@@ -137,4 +230,210 @@ export interface Plan {
   filledAmount: number;
   warning?: string;
   tiers: PlanTier[];
+  scenarioName?: string;
+  templateWeights?: number[];
+  currentPosition?: PlanPositionState | null;
+  final?: PlanFinalState | null;
+  coverage?: Coverage;
+  totalPlannedUsd?: number;
+  estimatedFee?: number;
+  estimatedFeeUsd?: number;
+}
+
+export type CapitalEventType = "cash_in" | "cash_out" | "transfer_in" | "transfer_out" | "adjustment";
+
+export interface CapitalEventInput {
+  type: CapitalEventType;
+  eventDate: string;
+  broker?: string;
+  market?: string;
+  symbol?: string;
+  name?: string;
+  currency: Currency;
+  amount?: number;
+  quantity?: number;
+  unitCost?: number;
+  source?: string;
+  sourceId?: string;
+  note?: string;
+}
+
+export interface CapitalEvent extends CapitalEventInput {
+  id: number;
+  capitalAmount: number;
+  netInvestedImpact: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CashFlowEventType = "dividend" | "realized_gain" | "trade_fee" | "financing_fee";
+
+export interface CashFlowEventInput {
+  type: CashFlowEventType;
+  eventDate: string;
+  broker?: string;
+  market?: string;
+  symbol?: string;
+  name?: string;
+  currency: Currency;
+  grossAmount: number;
+  taxAmount?: number;
+  feeAmount?: number;
+  source?: string;
+  sourceId?: string;
+  note?: string;
+}
+
+export interface CashFlowEvent extends CashFlowEventInput {
+  id: number;
+  netAmount: number;
+  cashImpact: number;
+  pnlImpact: number;
+}
+
+export interface UnifiedCashFlowItem {
+  id: number | string;
+  eventDate: string;
+  category: string;
+  type: string;
+  market?: string;
+  symbol?: string;
+  currency: Currency;
+  grossAmount: number;
+  feeAmount: number;
+  taxAmount: number;
+  cashImpact: number;
+  pnlImpact: number;
+  source: string;
+  fxRate?: number;
+  grossAmountUsd?: number;
+  feeAmountUsd?: number;
+  taxAmountUsd?: number;
+  cashImpactUsd?: number;
+  pnlImpactUsd?: number;
+  grossAmountDisplay?: number;
+  cashImpactDisplay?: number;
+  pnlImpactDisplay?: number;
+}
+
+export interface CashFlowResult {
+  display?: Currency;
+  items: UnifiedCashFlowItem[];
+  summary: {
+    buy: number;
+    sell: number;
+    dividend: number;
+    fees: number;
+    externalIn: number;
+    externalOut: number;
+    netCash: number;
+  };
+}
+
+export interface RiskSettings {
+  symbolLimit: number;
+  bucketLimit: number;
+  cashFloor: number;
+  updatedAt?: string | null;
+  source?: "default" | "custom" | string;
+}
+
+export interface BucketBudget {
+  bucket: string;
+  quarter: string;
+  effectiveQuarter?: string | null;
+  revision?: number | null;
+  limitAmount: number | null;
+  currency: Currency | null;
+  fxRate?: number | null;
+  limitUsd: number | null;
+  usedUsd: number;
+  availableUsd: number | null;
+  recoveredSurplusUsd: number;
+  adjustmentsUsed: number;
+  canAdjust: boolean;
+  nextAdjustableQuarter?: string;
+  coverage: Coverage;
+}
+
+export interface BucketBudgetResult {
+  quarter: string;
+  budgets: BucketBudget[];
+}
+
+export interface SafetyRoom {
+  limit: number;
+  amount: number | null;
+  amountUsd: number | null;
+  currentRatio?: number | null;
+  postRatio?: number | null;
+}
+
+export interface SafetyAddResult {
+  complete: boolean;
+  missing: string[];
+  coverage?: Coverage;
+  baseCurrency: "USD";
+  currency: Currency;
+  display?: Currency;
+  fxRate: number;
+  safeAmount: number | null;
+  safeAmountUsd: number | null;
+  bottleneck: "symbol" | "bucket" | "cash" | "budget" | null;
+  rooms: {
+    symbol: SafetyRoom;
+    bucket: SafetyRoom;
+    cash: SafetyRoom;
+    budget: SafetyRoom;
+  };
+  context: Record<string, number | string | null>;
+  candidate?: {
+    amount: number;
+    safe: boolean;
+    violations?: string[];
+  } | null;
+}
+
+export interface PlanInputTier {
+  seq: number;
+  triggerType: "pct_drop" | "price";
+  triggerValue: number;
+  allocType: "pct" | "amount";
+  allocValue: number;
+}
+
+export interface PlanInput {
+  symbol: string;
+  name: string;
+  market: string;
+  currency: Currency;
+  basePrice: number;
+  totalBudget: number;
+  estimatedFee?: number;
+  note?: string;
+  scenarioName?: string;
+  templateWeights?: number[];
+  tiers: PlanInputTier[];
+}
+
+export interface PlanPositionState {
+  quantity?: number | null;
+  bookCost?: number | null;
+  avgCost?: number | null;
+  marketValue?: number | null;
+}
+
+export interface PlanFinalState extends PlanPositionState {
+  cash?: number | null;
+  cashRatio?: number | null;
+  symbolRatio?: number | null;
+  bucketRatio?: number | null;
+  budgetAvailable?: number | null;
+  safe?: boolean;
+}
+
+export interface PlanComparisonResult {
+  market: string;
+  symbol: string;
+  scenarios: Plan[];
 }

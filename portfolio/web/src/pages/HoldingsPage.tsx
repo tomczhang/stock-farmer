@@ -1,690 +1,246 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { fmtMoney } from "../components/Chart";
-import { analyzeStatementFiles, BROKERS, type BrokerId } from "../lib/parse/analyze";
-import { BUCKET_LABELS, type Bucket, type Currency, type StatementRow, type Summary, type TradeRow } from "../types";
-
-interface PreviewPosition {
-  market: string;
-  currency: string;
-  symbol: string;
-  name: string;
-  quantity: number;
-  marketValue: number;
-  costBasis: number | null;
-  unrealizedGl: number | null;
-}
-
-interface PreviewCash {
-  currency: string;
-  amount: string;
-  fromParse: boolean;
-}
-
-interface TradeForm {
-  broker: string;
-  market: string;
-  currency: Currency;
-  symbol: string;
-  name: string;
-  side: "buy" | "sell";
-  tradeDate: string;
-  quantity: string;
-  price: string;
-  fee: string;
-}
-
-const EMPTY_TRADE: TradeForm = {
-  broker: "",
-  market: "US",
-  currency: "USD",
-  symbol: "",
-  name: "",
-  side: "buy",
-  tradeDate: new Date().toISOString().slice(0, 10),
-  quantity: "",
-  price: "",
-  fee: "",
-};
+import { describeCoverageItems } from "../lib/portfolio/coverage";
+import { aggregateSummaryPositions, type InstrumentPosition } from "../lib/portfolio/positions";
+import { BUCKET_LABELS, type Bucket, type Coverage, type Summary } from "../types";
 
 const COST_SOURCE_LABEL: Record<string, string> = {
-  manual: "手动",
-  trades: "流水",
+  manual: "人工确认",
   statement: "月结单",
-  none: "—",
+  trades: "待核对流水",
+  none: "待补录",
+  mixed: "多券商来源",
 };
+
+type SortKey = "holding" | "pnl" | "symbol";
+
+function moneyOrDash(value: number | null | undefined, prefix = "$") {
+  return value == null ? "—" : `${value >= 0 ? "+" : ""}${prefix}${fmtMoney(value)}`;
+}
+
+function coverageLabel(coverage?: Coverage) {
+  if (!coverage) return { text: "旧口径", className: "gray" };
+  if (coverage.status === "complete") return { text: "完整", className: "ok" };
+  if (coverage.status === "partial") return { text: "部分数据", className: "warn" };
+  return { text: "待补录", className: "warn" };
+}
 
 export default function HoldingsPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [statements, setStatements] = useState<StatementRow[]>([]);
-  const [trades, setTrades] = useState<TradeRow[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [entryMode, setEntryMode] = useState<"statement" | "trade">("statement");
-
-  // 成本编辑状态
+  const [bucketFilter, setBucketFilter] = useState("");
+  const [qualityOnly, setQualityOnly] = useState(false);
+  const [sort, setSort] = useState<SortKey>("holding");
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [editingCost, setEditingCost] = useState<{ key: string; value: string } | null>(null);
+  // 分层视图：默认只看自主组合，授予仓（RSU）单独隔离
+  const [scope, setScope] = useState<"self" | "all">("self");
 
-  // 手动交易表单
-  const [tradeForm, setTradeForm] = useState<TradeForm>(EMPTY_TRADE);
-  const [tradeSaving, setTradeSaving] = useState(false);
-
-  // 上传向导状态
-  const [broker, setBroker] = useState<BrokerId | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
-  const [password, setPassword] = useState("");
-  const [parsing, setParsing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [drag, setDrag] = useState(false);
-  const [preview, setPreview] = useState<{
-    positions: PreviewPosition[];
-    cash: PreviewCash[];
-    asOf: string;
-    issues: Array<{ severity: string; title: string; detail: string }>;
-  } | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-
-  const brokerMeta = useMemo(() => BROKERS.find((b) => b.id === broker), [broker]);
-  const step = preview ? 3 : files.length > 0 ? 2 : broker ? 2 : 1;
-
-  const loadAll = useCallback(async () => {
+  const load = useCallback(async () => {
     setBusy(true);
+    setError("");
     try {
-      const [s, st, tr] = await Promise.all([
-        api.get<Summary>("/api/portfolio/summary?display=USD"),
-        api.get<StatementRow[]>("/api/statements"),
-        api.get<TradeRow[]>("/api/trades"),
-      ]);
-      setSummary(s);
-      setStatements(st);
-      setTrades(tr);
+      setSummary(await api.get<Summary>(`/api/portfolio/summary?display=USD${scope === "self" ? "&scope=self" : ""}`));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "加载失败");
+      setError(err instanceof ApiError ? err.message : "持仓加载失败");
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    void load();
+  }, [load]);
 
-  const setBucket = async (symbol: string, bucket: string) => {
+  const setBucket = async (market: string, symbol: string, bucket: string) => {
     try {
-      await api.put("/api/buckets", { symbol, bucket: bucket === "unassigned" ? null : (bucket as Bucket) });
-      await loadAll();
+      await api.put("/api/buckets", { market, symbol, bucket: bucket === "unassigned" ? null : (bucket as Bucket) });
+      await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "标注失败");
+      setError(err instanceof ApiError ? err.message : "仓别保存失败");
     }
   };
 
-  const saveCost = async (brokerName: string, symbol: string, raw: string) => {
-    setEditingCost(null);
-    const trimmed = raw.trim();
+  /** 按每股成本录入，保存时换算为总成本（后端口径）；清空则恢复券商快照成本。 */
+  const saveCost = async (broker: string, symbol: string, raw: string, quantity: number) => {
+    const value = raw.trim();
+    const perShare = value === "" ? null : Number(value);
+    if (perShare != null && (!Number.isFinite(perShare) || perShare < 0)) {
+      setError("每股成本需为非负数字，清空可恢复月结单口径");
+      return;
+    }
+    const total = perShare == null ? null : quantity > 0 ? Math.round(perShare * quantity * 10000) / 10000 : perShare;
     try {
-      await api.put("/api/positions/cost", {
-        broker: brokerName,
-        symbol,
-        costBasis: trimmed === "" ? null : Number(trimmed),
-      });
-      await loadAll();
+      await api.put("/api/positions/cost", { broker, symbol, costBasis: total });
+      setEditingCost(null);
+      setNotice(value === "" ? "已恢复券商快照成本口径" : `${symbol} · ${broker} 成本已按 ${perShare}/股 更新（共 ${total}）`);
+      await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "成本保存失败");
     }
   };
 
-  const submitTrade = async () => {
-    setTradeSaving(true);
-    setError("");
-    try {
-      await api.post("/api/trades", {
-        broker: tradeForm.broker || "manual",
-        market: tradeForm.market,
-        currency: tradeForm.currency,
-        symbol: tradeForm.symbol,
-        name: tradeForm.name || undefined,
-        side: tradeForm.side,
-        tradeDate: tradeForm.tradeDate,
-        quantity: Number(tradeForm.quantity),
-        price: Number(tradeForm.price),
-        fee: tradeForm.fee === "" ? 0 : Number(tradeForm.fee),
-      });
-      setNotice(`已录入 ${tradeForm.side === "buy" ? "买入" : "卖出"} ${tradeForm.symbol.toUpperCase()}`);
-      setTradeForm({ ...EMPTY_TRADE, broker: tradeForm.broker, market: tradeForm.market, currency: tradeForm.currency });
-      await loadAll();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "录入失败");
-    } finally {
-      setTradeSaving(false);
-    }
-  };
-
-  const removeTrade = async (id: number) => {
-    if (!window.confirm("确定删除这笔交易记录？")) return;
-    try {
-      await api.delete(`/api/trades/${id}`);
-      await loadAll();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "删除失败");
-    }
-  };
-
-  const resetWizard = () => {
-    setFiles([]);
-    setPassword("");
-    setPreview(null);
-  };
-
-  const addFiles = (incoming: FileList | null) => {
-    if (!incoming) return;
-    setPreview(null);
-    setFiles((prev) => {
-      const merged = [...prev];
-      for (const file of Array.from(incoming)) {
-        if (!merged.some((f) => f.name === file.name && f.size === file.size)) merged.push(file);
-      }
-      return merged;
+  const instruments = useMemo(
+    () => aggregateSummaryPositions(summary?.positions ?? [], summary?.kpi.positionsValue ?? 0, summary?.instruments),
+    [summary],
+  );
+  const positions = useMemo(() => {
+    const filtered = instruments.filter((position) => {
+      if (bucketFilter && position.bucket !== bucketFilter) return false;
+      if (qualityOnly && position.coverage.status === "complete") return false;
+      return true;
     });
-  };
+    return [...filtered].sort((a, b) => {
+      if (sort === "symbol") return a.symbol.localeCompare(b.symbol);
+      if (sort === "pnl") return (b.pnl.explainedTotal ?? -Infinity) - (a.pnl.explainedTotal ?? -Infinity);
+      return b.holdingRatio - a.holdingRatio;
+    });
+  }, [instruments, bucketFilter, qualityOnly, sort]);
 
-  const parse = async () => {
-    if (!broker) return;
-    setParsing(true);
-    setError("");
-    setNotice("");
-    try {
-      const result = await analyzeStatementFiles({ broker, files, password: password || undefined });
-      if (result.positions.length === 0) {
-        setNotice("解析完成，但未在文件中找到持仓记录（可能是纯交易流水报表）。仍可手动确认现金后保存。");
-      }
-      setPreview({
-        positions: result.positions.map((p) => ({
-          market: p.market,
-          currency: p.currency,
-          symbol: p.symbol,
-          name: p.securityName,
-          quantity: p.quantity,
-          marketValue: p.marketValue,
-          costBasis: p.costBasis ?? null,
-          unrealizedGl: p.unrealizedGainLoss ?? null,
-        })),
-        cash:
-          result.cashBalances.length > 0
-            ? result.cashBalances.map((c) => ({ currency: c.currency, amount: String(c.amount), fromParse: true }))
-            : [{ currency: "USD", amount: "", fromParse: false }],
-        asOf: result.asOf,
-        issues: result.issues.filter((issue) => issue.severity !== "info").slice(0, 5),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "解析失败");
-    } finally {
-      setParsing(false);
-    }
-  };
+  const totalBookCost = summary?.costs?.bookCost ?? summary?.kpi.totalCost ?? null;
+  const externalNetInvested = summary?.costs?.externalNetInvested ?? null;
+  const missingCount = instruments.filter((position) => position.coverage.status !== "complete").length;
 
-  const save = async () => {
-    if (!broker || !preview) return;
-    setSaving(true);
-    setError("");
-    try {
-      await api.post("/api/statements", {
-        broker,
-        fileName: files.map((f) => f.name).join(", "),
-        asOf: preview.asOf,
-        positions: preview.positions.map((p) => ({ ...p, broker })),
-        cashBalances: preview.cash
-          .filter((c) => c.amount !== "" && Number.isFinite(Number(c.amount)))
-          .map((c) => ({ broker, currency: c.currency, amount: Number(c.amount) })),
-      });
-      setNotice(`已保存 ${brokerMeta?.label} @ ${preview.asOf} 快照`);
-      resetWizard();
-      setBroker(null);
-      await loadAll();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "保存失败");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const removeStatement = async (id: number) => {
-    if (!window.confirm("确定删除该快照？对应的持仓与现金记录将一并删除。")) return;
-    try {
-      await api.delete(`/api/statements/${id}`);
-      await loadAll();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "删除失败");
-    }
-  };
-
-  if (busy) {
-    return (
-      <div className="empty">
-        <span className="spin dark" />
-      </div>
-    );
-  }
+  if (busy) return <div className="empty"><span className="spin dark" aria-label="正在加载持仓" /></div>;
 
   return (
     <div className="fade-in">
-      <h1 className="page-title">持仓明细</h1>
-      <p className="page-desc">
-        每个标的的成本、当前价格与盈亏；成本可直接编辑（优先级：手动 &gt; 交易流水 &gt; 月结单），并可标注进取/防守/稳健仓。
-      </p>
-
-      {error && <div className="alert error">{error}</div>}
-      {notice && <div className="alert ok">{notice}</div>}
-
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-h">
-          持仓明细（USD 折算）<span className="tag">点击成本可编辑</span>
+      <div className="page-heading-row">
+        <div>
+          <h1 className="page-title">持仓分析</h1>
+          <p className="page-desc">按市场与标的聚合仓位、账面成本和盈亏；券商明细可展开核对。</p>
         </div>
-        {!summary || summary.positions.length === 0 ? (
-          <div className="empty">暂无持仓，请在下方录入月结单或手动录入交易</div>
+        <div className="heading-actions">
+          <div className="scope-toggle" role="tablist" aria-label="持仓视图范围">
+            <button role="tab" aria-selected={scope === "self"} className={scope === "self" ? "active" : ""} onClick={() => setScope("self")}>自主组合</button>
+            <button role="tab" aria-selected={scope === "all"} className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全部资产</button>
+          </div>
+          <Link className="btn ghost" to="/data">补录数据</Link>
+        </div>
+      </div>
+
+      {scope === "self" && (summary?.grant?.count ?? 0) > 0 && (
+        <div className="alert warn" role="status">
+          已隔离授予仓（RSU）：{summary?.grant?.symbols.join("、")} · ${fmtMoney(summary?.grant?.valueDisplay ?? 0, 0)}，不计入下方分布与集中度；切换到“全部资产”可查看。
+        </div>
+      )}
+
+      {error && <div className="alert error" role="alert">{error}</div>}
+      {notice && <div className="alert ok" role="status">{notice}</div>}
+      {summary?.coverage && summary.coverage.status !== "complete" && (
+        <div className="alert warn coverage-alert">
+          <div><b>当前为部分数据</b>：未知金额不会按 0 计入盈亏。</div>
+          <div>{describeCoverageItems([...summary.coverage.issues, ...summary.coverage.missing]).join("；")}</div>
+          <Link to="/data">前往数据管理补齐</Link>
+        </div>
+      )}
+
+      <section className="grid grid-4 holdings-kpis" aria-label="持仓核心指标">
+        <div className="kpi ok"><div className="k">持仓市值</div><div className="v">${fmtMoney(summary?.kpi.positionsValue ?? 0, 0)}</div><div className="sub">{instruments.length} 个标的</div></div>
+        <div className="kpi violet"><div className="k">账面成本</div><div className="v">{totalBookCost == null ? "—" : `$${fmtMoney(totalBookCost, 0)}`}</div><div className="sub">当前剩余股份 · USD</div></div>
+        <div className="kpi blue"><div className="k">外部净投入</div><div className="v">{externalNetInvested == null ? "待初始化" : `$${fmtMoney(externalNetInvested, 0)}`}</div><div className="sub">不会随内部买卖重复累计</div></div>
+        <div className="kpi accent"><div className="k">数据缺口</div><div className="v">{missingCount}</div><div className="sub">缺成本或收益流水的标的</div></div>
+      </section>
+
+      <section className="card section-card" aria-labelledby="positions-title">
+        <div className="card-h" id="positions-title">单股成本与盈亏<span className="tag">按 market:symbol 聚合 · USD</span></div>
+        <div className="filter-row holdings-filter">
+          <div className="field"><label htmlFor="holding-bucket-filter">仓别</label><select id="holding-bucket-filter" className="select" value={bucketFilter} onChange={(event) => setBucketFilter(event.target.value)}><option value="">全部仓别</option>{Object.entries(BUCKET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+          <div className="field"><label htmlFor="holding-sort">排序</label><select id="holding-sort" className="select" value={sort} onChange={(event) => setSort(event.target.value as SortKey)}><option value="holding">持仓占比</option><option value="pnl">累计盈亏</option><option value="symbol">标的代码</option></select></div>
+          <label className="check-field"><input type="checkbox" checked={qualityOnly} onChange={(event) => setQualityOnly(event.target.checked)} />只看待补录</label>
+        </div>
+
+        {positions.length === 0 ? (
+          <div className="empty">没有符合条件的持仓</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>标的</th>
-                  <th>仓别</th>
-                  <th>券商</th>
-                  <th className="num">数量</th>
-                  <th className="num">成本（原币）</th>
-                  <th className="num">当前价格</th>
-                  <th className="num">市值（原币）</th>
-                  <th className="num">盈亏（USD）</th>
-                </tr>
-              </thead>
+          <div className="table-scroll holdings-table-wrap" tabIndex={0} aria-label="持仓表，可横向滚动">
+            <table className="table holdings-table">
+              <thead><tr><th>标的 / 行情</th><th>仓别</th><th className="num">市值 / 占比</th><th className="num">账面成本</th><th className="num">资本利得</th><th className="num">股息</th><th className="num">交易费用</th><th className="num">累计盈亏</th><th>数据</th><th /></tr></thead>
               <tbody>
-                {summary.positions.map((p) => {
-                  const key = `${p.broker}|${p.symbol}`;
-                  const editing = editingCost?.key === key;
+                {positions.map((position) => {
+                  const detailId = `detail-${position.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+                  const coverage = coverageLabel(position.coverage);
                   return (
-                    <tr key={key}>
-                      <td>
-                        <b>{p.symbol}</b>
-                        <span style={{ color: "var(--ink-4)", fontSize: 11, marginLeft: 6 }}>{p.name}</span>
-                      </td>
-                      <td>
-                        <select
-                          className="select"
-                          style={{ width: 96, padding: "3px 6px", fontSize: 12 }}
-                          value={p.bucket}
-                          onChange={(e) => setBucket(p.symbol, e.target.value)}
-                        >
-                          {Object.entries(BUCKET_LABELS).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>{p.broker}</td>
-                      <td className="num">{fmtMoney(p.quantity, 0)}</td>
-                      <td className="num">
-                        {editing ? (
-                          <input
-                            className="input sm"
-                            style={{ width: 110, textAlign: "right" }}
-                            type="number"
-                            autoFocus
-                            value={editingCost.value}
-                            onChange={(e) => setEditingCost({ key, value: e.target.value })}
-                            onBlur={() => saveCost(p.broker, p.symbol, editingCost.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") saveCost(p.broker, p.symbol, editingCost.value);
-                              if (e.key === "Escape") setEditingCost(null);
-                            }}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            className="cost-edit"
-                            title="点击编辑成本；清空后保存可恢复自动值"
-                            onClick={() =>
-                              setEditingCost({ key, value: p.effectiveCost != null ? String(p.effectiveCost) : "" })
-                            }
-                          >
-                            {p.effectiveCost != null ? `${fmtMoney(p.effectiveCost)} ${p.currency}` : "—"}
-                            <span className="chip gray" style={{ marginLeft: 6 }}>
-                              {COST_SOURCE_LABEL[p.costSource]}
-                            </span>
-                          </button>
-                        )}
-                      </td>
-                      <td className="num">
-                        {p.currentPrice != null ? `${fmtMoney(p.currentPrice)} ${p.currency}` : "—"}
-                        {p.quoteApplied && <span className="chip ok" style={{ marginLeft: 4 }}>实时</span>}
-                      </td>
-                      <td className="num">{fmtMoney(p.marketValue)} {p.currency}</td>
-                      <td className={`num ${p.gainLossDisplay == null ? "" : p.gainLossDisplay >= 0 ? "pos" : "neg"}`}>
-                        {p.gainLossDisplay == null
-                          ? "—"
-                          : `${p.gainLossDisplay >= 0 ? "+" : ""}$${fmtMoney(p.gainLossDisplay)}`}
-                      </td>
-                    </tr>
+                    <Fragment key={position.key}>
+                      <tr>
+                        <td><b>{position.symbol}</b><span className="position-name">{position.name}</span><span className="position-quote">{position.currentPrice == null ? "行情待更新" : `${fmtMoney(position.currentPrice)} ${position.currency}`}{position.quoteApplied ? " · 最新" : ""} · {position.brokerRows.length} 个券商账户</span></td>
+                        <td><select aria-label={`${position.symbol} 仓别`} className="select compact-select" value={position.bucket} onChange={(event) => setBucket(position.market, position.symbol, event.target.value)}>{Object.entries(BUCKET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
+                        <td className="num"><b>${fmtMoney(position.valueDisplay, 0)}</b><span className="cell-sub">{(position.holdingRatio * 100).toFixed(1)}% 持仓内</span></td>
+                        <td className="num">
+                          {position.avgCost != null
+                            ? <b>{fmtMoney(position.avgCost)} {position.currency}/股</b>
+                            : position.bookCostDisplay == null ? "待补录" : `$${fmtMoney(position.bookCostDisplay)}`}
+                          {position.avgCost != null && position.bookCostDisplay != null && <span className="cell-sub">共 ${fmtMoney(position.bookCostDisplay)}</span>}
+                          <span className={`chip ${position.bookCostDisplay == null ? "warn" : "gray"}`}>{COST_SOURCE_LABEL[position.costSource] ?? position.costSource}</span>
+                        </td>
+                        <td className={`num ${(position.pnl.capitalGain ?? 0) >= 0 ? "pos" : "neg"}`}>{moneyOrDash(position.pnl.capitalGain)}</td>
+                        <td className="num pos">{moneyOrDash(position.pnl.dividendsNet)}</td>
+                        <td className="num neg">{position.pnl.tradingFees ? `-$${fmtMoney(Math.abs(position.pnl.tradingFees))}` : "$0.00"}</td>
+                        <td className={`num ${(position.pnl.explainedTotal ?? 0) >= 0 ? "pos" : "neg"}`}><b>{moneyOrDash(position.pnl.explainedTotal)}</b></td>
+                        <td><span className={`chip ${coverage.className}`}>{coverage.text}</span></td>
+                        <td><button className="btn ghost sm" aria-expanded={expanded === position.key} aria-controls={detailId} onClick={() => setExpanded(expanded === position.key ? null : position.key)}>{expanded === position.key ? "收起" : "详情"}</button></td>
+                      </tr>
+                      {expanded === position.key && <InstrumentDetail position={position} detailId={detailId} editingCost={editingCost} setEditingCost={setEditingCost} saveCost={saveCost} />}
+                    </Fragment>
                   );
                 })}
               </tbody>
             </table>
           </div>
         )}
-      </div>
-
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-h">录入</div>
-        <div className="auth-tabs" style={{ maxWidth: 360 }}>
-          <button className={entryMode === "statement" ? "active" : ""} onClick={() => setEntryMode("statement")}>
-            上传月结单
-          </button>
-          <button className={entryMode === "trade" ? "active" : ""} onClick={() => setEntryMode("trade")}>
-            手动录入交易
-          </button>
-        </div>
-
-        {entryMode === "trade" ? (
-          <div className="fade-in">
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>券商</label>
-                <input className="input sm" style={{ width: 90 }} placeholder="如 ibkr" value={tradeForm.broker}
-                  onChange={(e) => setTradeForm({ ...tradeForm, broker: e.target.value })} />
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>市场</label>
-                <select className="select" style={{ width: 80, padding: "5px 8px", fontSize: 12 }} value={tradeForm.market}
-                  onChange={(e) => {
-                    const market = e.target.value;
-                    setTradeForm({ ...tradeForm, market, currency: market === "HK" ? "HKD" : "USD" });
-                  }}>
-                  <option value="US">美股</option>
-                  <option value="HK">港股</option>
-                </select>
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>标的</label>
-                <input className="input sm" style={{ width: 90 }} placeholder="AAPL / 00700" value={tradeForm.symbol}
-                  onChange={(e) => setTradeForm({ ...tradeForm, symbol: e.target.value })} />
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>方向</label>
-                <select className="select" style={{ width: 76, padding: "5px 8px", fontSize: 12 }} value={tradeForm.side}
-                  onChange={(e) => setTradeForm({ ...tradeForm, side: e.target.value as "buy" | "sell" })}>
-                  <option value="buy">买入</option>
-                  <option value="sell">卖出</option>
-                </select>
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>日期</label>
-                <input className="input sm" style={{ width: 130 }} type="date" value={tradeForm.tradeDate}
-                  onChange={(e) => setTradeForm({ ...tradeForm, tradeDate: e.target.value })} />
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>数量</label>
-                <input className="input sm" style={{ width: 80 }} type="number" value={tradeForm.quantity}
-                  onChange={(e) => setTradeForm({ ...tradeForm, quantity: e.target.value })} />
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>成交价（{tradeForm.currency}）</label>
-                <input className="input sm" style={{ width: 100 }} type="number" value={tradeForm.price}
-                  onChange={(e) => setTradeForm({ ...tradeForm, price: e.target.value })} />
-              </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>手续费</label>
-                <input className="input sm" style={{ width: 80 }} type="number" placeholder="0" value={tradeForm.fee}
-                  onChange={(e) => setTradeForm({ ...tradeForm, fee: e.target.value })} />
-              </div>
-              <button className="btn sm" style={{ height: 32 }}
-                disabled={tradeSaving || !tradeForm.symbol || !tradeForm.quantity || !tradeForm.price}
-                onClick={submitTrade}>
-                {tradeSaving ? <span className="spin" /> : "录入交易"}
-              </button>
-            </div>
-            <p style={{ fontSize: 11, color: "var(--ink-4)", marginTop: 10 }}>
-              交易流水用于计算实际净成本（买入净额 − 卖出净额，含手续费，可为负 = 已回本）；
-              月结单中不存在的标的会按净数量直接建立持仓。
-            </p>
-
-            {trades.length > 0 && (
-              <div style={{ marginTop: 14, maxHeight: 260, overflowY: "auto" }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>日期</th>
-                      <th>标的</th>
-                      <th>方向</th>
-                      <th className="num">数量</th>
-                      <th className="num">成交价</th>
-                      <th className="num">手续费</th>
-                      <th className="num">净额</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.map((t) => (
-                      <tr key={t.id}>
-                        <td>{t.tradeDate}</td>
-                        <td>
-                          <b>{t.symbol}</b>
-                          <span style={{ color: "var(--ink-4)", fontSize: 11, marginLeft: 6 }}>{t.broker}</span>
-                        </td>
-                        <td>
-                          <span className={`chip ${t.side === "buy" ? "ok" : "warn"}`}>{t.side === "buy" ? "买入" : "卖出"}</span>
-                        </td>
-                        <td className="num">{fmtMoney(t.quantity, 0)}</td>
-                        <td className="num">{fmtMoney(t.price)} {t.currency}</td>
-                        <td className="num">{fmtMoney(t.fee)}</td>
-                        <td className={`num ${t.side === "buy" ? "" : "pos"}`}>
-                          {t.side === "buy" ? "-" : "+"}{fmtMoney(t.quantity * t.price + (t.side === "buy" ? t.fee : -t.fee))} {t.currency}
-                        </td>
-                        <td>
-                          <button className="btn danger sm" onClick={() => removeTrade(t.id)}>删除</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="fade-in">
-            <div className="steps">
-              <div className={`step ${step > 1 ? "done" : "active"}`}>1. 选择券商</div>
-              <div className={`step ${step === 2 ? "active" : step > 2 ? "done" : ""}`}>2. 上传并解析</div>
-              <div className={`step ${step === 3 ? "active" : ""}`}>3. 预览确认</div>
-            </div>
-
-            <div className="broker-grid" style={{ marginBottom: 16 }}>
-              {BROKERS.map((b) => (
-                <div key={b.id} className={`broker-item ${broker === b.id ? "active" : ""}`}
-                  onClick={() => { setBroker(b.id); resetWizard(); }}>
-                  <div className="name">{b.label}</div>
-                  <div className="hint">{b.hint}</div>
-                </div>
-              ))}
-            </div>
-
-            {broker && (
-              <>
-                <div className={`dropzone ${drag ? "drag" : ""}`}
-                  onClick={() => fileInput.current?.click()}
-                  onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-                  onDragLeave={() => setDrag(false)}
-                  onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
-                  {files.length === 0 ? (
-                    <>点击或拖入 {brokerMeta?.label} 月结单（{brokerMeta?.accept}），可多选</>
-                  ) : (
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-                      {files.map((f) => (
-                        <span key={f.name} className="chip gray">
-                          {f.name}
-                          <button className="btn danger sm" style={{ padding: "0 4px", marginLeft: 4 }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPreview(null);
-                              setFiles((prev) => prev.filter((x) => x.name !== f.name));
-                            }}>
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <input ref={fileInput} type="file" accept={brokerMeta?.accept} multiple hidden
-                    onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
-                </div>
-
-                <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
-                  {brokerMeta?.needsPassword && (
-                    <input className="input" style={{ width: 240 }} type="password"
-                      placeholder="PDF 密码（仅在浏览器本地使用）" value={password}
-                      onChange={(e) => setPassword(e.target.value)} />
-                  )}
-                  <button className="btn" disabled={parsing || files.length === 0} onClick={parse}>
-                    {parsing ? (<><span className="spin" /> 本地解析中…</>) : ("本地解析")}
-                  </button>
-                  {files.length > 0 && (
-                    <button className="btn ghost" onClick={resetWizard}>重置</button>
-                  )}
-                </div>
-              </>
-            )}
-
-            {preview && (
-              <div className="fade-in" style={{ marginTop: 20, borderTop: "1px dashed var(--border)", paddingTop: 18 }}>
-                {preview.issues.length > 0 && (
-                  <div className="alert warn">
-                    {preview.issues.map((issue) => (
-                      <div key={issue.title}><b>{issue.title}</b>：{issue.detail}</div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-                  <div className="card-h" style={{ margin: 0 }}>持仓预览（{preview.positions.length} 条）</div>
-                  <label style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                    快照日期
-                    <input className="input sm" style={{ width: 130, marginLeft: 6 }} type="date" value={preview.asOf}
-                      onChange={(e) => setPreview({ ...preview, asOf: e.target.value })} />
-                  </label>
-                </div>
-                <div style={{ maxHeight: 300, overflowY: "auto", marginBottom: 16 }}>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>标的</th><th>市场</th><th>币种</th>
-                        <th className="num">数量</th><th className="num">市值</th><th className="num">成本</th><th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.positions.map((p, i) => (
-                        <tr key={`${p.symbol}-${i}`}>
-                          <td>
-                            <b>{p.symbol}</b>
-                            <span style={{ color: "var(--ink-4)", fontSize: 11, marginLeft: 6 }}>{p.name}</span>
-                          </td>
-                          <td>{p.market}</td>
-                          <td>{p.currency}</td>
-                          <td className="num">{fmtMoney(p.quantity, 0)}</td>
-                          <td className="num">
-                            <input className="input sm num" style={{ width: 110, textAlign: "right" }} type="number"
-                              value={p.marketValue}
-                              onChange={(e) => {
-                                const next = [...preview.positions];
-                                next[i] = { ...p, marketValue: Number(e.target.value) };
-                                setPreview({ ...preview, positions: next });
-                              }} />
-                          </td>
-                          <td className="num">{p.costBasis != null ? fmtMoney(p.costBasis) : "—"}</td>
-                          <td>
-                            <button className="btn danger sm"
-                              onClick={() => setPreview({ ...preview, positions: preview.positions.filter((_, j) => j !== i) })}>
-                              删除
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="card-h">
-                  现金余额
-                  {preview.cash.some((c) => !c.fromParse) && (
-                    <span className="chip warn">未能从月结单自动提取，请手动填写</span>
-                  )}
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
-                  {preview.cash.map((c, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <select className="select" style={{ width: 90, padding: "5px 8px", fontSize: 12 }} value={c.currency}
-                        onChange={(e) => {
-                          const next = [...preview.cash];
-                          next[i] = { ...c, currency: e.target.value };
-                          setPreview({ ...preview, cash: next });
-                        }}>
-                        <option>USD</option><option>HKD</option><option>CNY</option>
-                      </select>
-                      <input className="input sm" style={{ width: 150 }} type="number" placeholder="金额" value={c.amount}
-                        onChange={(e) => {
-                          const next = [...preview.cash];
-                          next[i] = { ...c, amount: e.target.value };
-                          setPreview({ ...preview, cash: next });
-                        }} />
-                      <span className={`chip ${c.fromParse ? "ok" : "gray"}`}>{c.fromParse ? "自动提取" : "手动"}</span>
-                      <button className="btn danger sm"
-                        onClick={() => setPreview({ ...preview, cash: preview.cash.filter((_, j) => j !== i) })}>
-                        删除
-                      </button>
-                    </div>
-                  ))}
-                  <button className="btn ghost sm" style={{ alignSelf: "flex-start" }}
-                    onClick={() => setPreview({ ...preview, cash: [...preview.cash, { currency: "USD", amount: "", fromParse: false }] })}>
-                    + 添加币种
-                  </button>
-                </div>
-
-                <button className="btn" disabled={saving} onClick={save}>
-                  {saving ? <span className="spin" /> : `确认保存快照（${brokerMeta?.label} @ ${preview.asOf}）`}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="card-h">历史快照</div>
-        {statements.length === 0 ? (
-          <div className="empty">还没有保存过快照</div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>券商</th><th>快照日期</th><th>文件</th>
-                <th className="num">持仓数</th><th className="num">现金记录</th><th>上传时间</th><th />
-              </tr>
-            </thead>
-            <tbody>
-              {statements.map((s) => (
-                <tr key={s.id}>
-                  <td><b>{BROKERS.find((b) => b.id === s.broker)?.label ?? s.broker}</b></td>
-                  <td>{s.asOf}</td>
-                  <td style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.fileName}</td>
-                  <td className="num">{s.positionCount}</td>
-                  <td className="num">{s.cashCount}</td>
-                  <td style={{ color: "var(--ink-4)", fontSize: 12 }}>{s.uploadedAt}</td>
-                  <td>
-                    <button className="btn danger sm" onClick={() => removeStatement(s.id)}>删除</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      </section>
     </div>
+  );
+}
+
+function InstrumentDetail({
+  position,
+  detailId,
+  editingCost,
+  setEditingCost,
+  saveCost,
+}: {
+  position: InstrumentPosition;
+  detailId: string;
+  editingCost: { key: string; value: string } | null;
+  setEditingCost: (value: { key: string; value: string } | null) => void;
+  saveCost: (broker: string, symbol: string, raw: string, quantity: number) => Promise<void>;
+}) {
+  return (
+    <tr id={detailId} className="position-detail-row">
+      <td colSpan={10}>
+        <div className="position-detail-grid">
+          <div><span>聚合数量</span><b>{fmtMoney(position.quantity, 0)} 股</b></div>
+          <div><span>当前平均账面成本</span><b>{position.avgCost == null ? "待补录" : `${fmtMoney(position.avgCost)} ${position.currency}`}</b></div>
+          <div><span>未实现 / 已实现资本利得</span><b>{moneyOrDash(position.pnl.unrealizedCapitalGain)} · {moneyOrDash(position.pnl.realizedCapitalGain)}</b></div>
+          <div><span>标的关联净投入</span><b>{position.externalNetInvested == null ? "待确认转仓成本" : position.externalNetInvested === 0 ? "无（场内买入）" : `$${fmtMoney(position.externalNetInvested)}`}</b></div>
+          <div><span>可归属融资费用</span><b>{position.pnl.financingFees ? `-$${fmtMoney(Math.abs(position.pnl.financingFees))}` : "$0.00"}</b></div>
+        </div>
+        <p className="helper-text">成本按“每股成本”录入，保存时自动按数量换算为总成本；清空保存可恢复券商快照口径。无法明确归属标的的融资费用只在资产总览体现，不在这里推测性摊派。</p>
+        {(position.coverage.issues.length > 0 || position.coverage.missing.length > 0) && <p className="data-issues">待补录：{describeCoverageItems([...position.coverage.issues, ...position.coverage.missing]).join("；")}</p>}
+        <div className="table-scroll broker-position-scroll" tabIndex={0} aria-label={`${position.symbol} 券商明细，可横向滚动`}>
+          <table className="table broker-position-table">
+            <thead><tr><th>券商</th><th>数据日期</th><th className="num">数量</th><th className="num">市值 USD</th><th className="num">券商账面成本</th><th>成本来源</th><th /></tr></thead>
+            <tbody>{position.brokerRows.map((row) => {
+              const editKey = `${row.broker}|${row.market}|${row.symbol}`;
+              const rowCost = row.bookCost ?? row.effectiveCost;
+              const editing = editingCost?.key === editKey;
+              return (
+                <tr key={editKey}>
+                  <td><b>{row.broker}</b></td><td>{row.asOf}</td><td className="num">{fmtMoney(row.quantity, 0)}</td><td className="num">${fmtMoney(row.valueDisplay)}</td>
+                  <td className="num">{editing ? <input aria-label={`${row.broker} ${row.symbol} 每股成本`} className="input sm cost-input" type="number" min="0" step="any" placeholder="每股成本" autoFocus value={editingCost.value} onChange={(event) => setEditingCost({ key: editKey, value: event.target.value })} /> : rowCost == null ? "待补录" : <>{row.quantity > 0 ? `${fmtMoney(rowCost / row.quantity)} ${row.currency}/股` : `${fmtMoney(rowCost)} ${row.currency}`}<span className="cell-sub">共 {fmtMoney(rowCost)} {row.currency}</span></>}</td>
+                  <td><span className={`chip ${rowCost == null ? "warn" : "gray"}`}>{COST_SOURCE_LABEL[row.bookCostSource ?? row.costSource] ?? row.costSource}</span></td>
+                  <td>{editing ? <div className="inline-actions"><button className="btn sm" onClick={() => void saveCost(row.broker, row.symbol, editingCost.value, row.quantity)}>保存</button><button className="btn ghost sm" onClick={() => setEditingCost(null)}>取消</button></div> : <button className="btn ghost sm" onClick={() => setEditingCost({ key: editKey, value: rowCost == null || !(row.quantity > 0) ? "" : String(Math.round((rowCost / row.quantity) * 10000) / 10000) })}>修改成本</button>}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        </div>
+      </td>
+    </tr>
   );
 }

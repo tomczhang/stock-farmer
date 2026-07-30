@@ -141,7 +141,140 @@ CREATE TABLE IF NOT EXISTS cost_overrides (
 );
 `;
 
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  {
+    version: 1,
+    sql: `
+      ALTER TABLE trades ADD COLUMN statement_id INTEGER REFERENCES statements(id) ON DELETE CASCADE;
+      ALTER TABLE trades ADD COLUMN source_id TEXT;
+      ALTER TABLE trades ADD COLUMN gross_amount REAL;
+      ALTER TABLE trades ADD COLUMN bucket TEXT;
+      ALTER TABLE trades ADD COLUMN cost_basis_disposed REAL;
+      ALTER TABLE trades ADD COLUMN realized_gain_loss REAL;
+      ALTER TABLE trades ADD COLUMN fx_to_usd REAL;
+
+      ALTER TABLE pyramid_plans ADD COLUMN scenario_name TEXT;
+      ALTER TABLE pyramid_plans ADD COLUMN template_weights_json TEXT;
+
+      CREATE TABLE capital_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        statement_id INTEGER REFERENCES statements(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        event_date TEXT NOT NULL,
+        broker TEXT,
+        market TEXT,
+        currency TEXT NOT NULL,
+        symbol TEXT,
+        name TEXT,
+        amount REAL,
+        quantity REAL,
+        unit_cost REAL,
+        fx_to_usd REAL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        source_id TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_capital_events_user_date ON capital_events(user_id, event_date DESC);
+      CREATE UNIQUE INDEX idx_capital_events_source
+        ON capital_events(user_id, source, source_id) WHERE source_id IS NOT NULL;
+
+      CREATE TABLE cash_flow_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        statement_id INTEGER REFERENCES statements(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        event_date TEXT NOT NULL,
+        broker TEXT,
+        market TEXT,
+        currency TEXT NOT NULL,
+        symbol TEXT,
+        name TEXT,
+        gross_amount REAL NOT NULL,
+        tax_amount REAL NOT NULL DEFAULT 0,
+        fee_amount REAL NOT NULL DEFAULT 0,
+        fx_to_usd REAL,
+        bucket TEXT,
+        source TEXT NOT NULL DEFAULT 'manual',
+        source_id TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_cash_flow_events_user_date ON cash_flow_events(user_id, event_date DESC);
+      CREATE UNIQUE INDEX idx_cash_flow_events_source
+        ON cash_flow_events(user_id, source, source_id) WHERE source_id IS NOT NULL;
+
+      CREATE TABLE risk_settings (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        symbol_limit REAL NOT NULL DEFAULT 0.5,
+        bucket_limit REAL NOT NULL DEFAULT 0.5,
+        cash_floor REAL NOT NULL DEFAULT 0.3,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE bucket_budgets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        bucket TEXT NOT NULL,
+        quarter TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        limit_amount REAL NOT NULL,
+        currency TEXT NOT NULL,
+        fx_to_usd REAL NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(user_id, bucket, quarter, revision)
+      );
+      CREATE INDEX idx_bucket_budgets_user_quarter ON bucket_budgets(user_id, quarter, bucket);
+
+      CREATE TABLE instrument_buckets (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        bucket TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, market, symbol)
+      );
+
+      CREATE UNIQUE INDEX idx_trades_source
+        ON trades(user_id, source, source_id) WHERE source_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE capital_events ADD COLUMN bucket TEXT;
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE pyramid_plans ADD COLUMN estimated_fee REAL NOT NULL DEFAULT 0;
+    `,
+  },
+];
+
 export type AppDatabase = Database.Database;
+
+function runMigrations(db: AppDatabase) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  const applied = db.prepare("SELECT 1 FROM schema_migrations WHERE version = ?");
+  const record = db.prepare("INSERT INTO schema_migrations (version) VALUES (?)");
+  const migrate = db.transaction((migration: (typeof MIGRATIONS)[number]) => {
+    db.exec(migration.sql);
+    record.run(migration.version);
+  });
+  for (const migration of MIGRATIONS) {
+    if (!applied.get(migration.version)) migrate(migration);
+  }
+}
 
 export function openDatabase(dbPath: string): AppDatabase {
   if (dbPath !== ":memory:") {
@@ -151,5 +284,6 @@ export function openDatabase(dbPath: string): AppDatabase {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  runMigrations(db);
   return db;
 }

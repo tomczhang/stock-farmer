@@ -3,11 +3,26 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { AuthError, createAuthService } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import type { AppDatabase } from "./db.js";
+import { ConflictError, ValidationError } from "./errors.js";
+import { createLedgerService } from "./ledger.js";
 import type { Mailer } from "./mailer.js";
 import { createPlanService } from "./plans.js";
-import { createPortfolioService, ValidationError } from "./portfolio.js";
+import { createPortfolioService } from "./portfolio.js";
 import { createQuoteService, type QuoteFetcher } from "./quotes.js";
-import type { Bucket, CashBalanceInput, Currency, PlanInput, StatementPayload, TradeInput } from "./types.js";
+import { createRiskService } from "./risk.js";
+import type {
+  Bucket,
+  BucketBudgetInput,
+  CapitalEventInput,
+  CashBalanceInput,
+  CashFlowEventInput,
+  Currency,
+  PlanInput,
+  RiskSettingsInput,
+  SafeAddInput,
+  StatementPayload,
+  TradeInput,
+} from "./types.js";
 
 const SESSION_COOKIE = "sf_session";
 
@@ -23,8 +38,12 @@ type Env = { Variables: { userId: number } };
 
 export function createApp({ db, config, mailer, quoteFetcher, secureCookie = true }: AppOptions) {
   const auth = createAuthService(db, mailer);
-  const portfolio = createPortfolioService(db, config.fxToUsd);
-  const plans = createPlanService(db, (userId) => portfolio.idleCashUsd(userId));
+  const ledger = createLedgerService(db, config.fxToUsd);
+  const portfolio = createPortfolioService(db, config.fxToUsd, ledger);
+  const risk = createRiskService(db, config.fxToUsd, ledger, (userId, market, symbol, bucket) =>
+    portfolio.riskContext(userId, market, symbol, bucket),
+  );
+  const plans = createPlanService(db, config.fxToUsd, risk);
   const quotes = createQuoteService(db, quoteFetcher);
 
   const app = new Hono<Env>();
@@ -32,6 +51,7 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
   app.onError((err, c) => {
     if (err instanceof AuthError) return c.json({ error: err.message }, err.status as 400);
     if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
+    if (err instanceof ConflictError) return c.json({ error: err.message, ...err.details }, 409);
     console.error(err);
     return c.json({ error: "服务器内部错误" }, 500);
   });
@@ -115,6 +135,71 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
     return c.json({ ok: true });
   });
 
+  app.delete("/api/cash", (c) => {
+    const broker = c.req.query("broker") ?? "";
+    const currency = c.req.query("currency") ?? "";
+    const ok = portfolio.clearManualCash(c.get("userId"), broker, currency);
+    return ok ? c.json({ ok: true }) : c.json({ error: "没有可清除的手动现金记录" }, 404);
+  });
+
+  // ---------- capital ledger ----------
+  app.get("/api/capital-events", (c) => {
+    const display = (["USD", "HKD", "CNY"].find((item) => item === c.req.query("display")) ?? "USD") as Currency;
+    return c.json(ledger.listCapitalEvents(c.get("userId"), display));
+  });
+
+  app.post("/api/capital-events", async (c) => {
+    const input = (await c.req.json()) as CapitalEventInput;
+    return c.json(ledger.createCapitalEvent(c.get("userId"), input), 201);
+  });
+
+  app.put("/api/capital-events/:id", async (c) => {
+    const input = (await c.req.json()) as CapitalEventInput;
+    const event = ledger.updateCapitalEvent(c.get("userId"), Number(c.req.param("id")), input);
+    return event ? c.json(event) : c.json({ error: "资本事件不存在" }, 404);
+  });
+
+  app.delete("/api/capital-events/:id", (c) => {
+    const ok = ledger.deleteCapitalEvent(c.get("userId"), Number(c.req.param("id")));
+    return ok ? c.json({ ok: true }) : c.json({ error: "资本事件不存在" }, 404);
+  });
+
+  // ---------- income / expense ledger ----------
+  app.get("/api/cash-flow-events", (c) => {
+    const display = (["USD", "HKD", "CNY"].find((item) => item === c.req.query("display")) ?? "USD") as Currency;
+    return c.json(ledger.listCashFlowEvents(c.get("userId"), display));
+  });
+
+  app.post("/api/cash-flow-events", async (c) => {
+    const input = (await c.req.json()) as CashFlowEventInput;
+    return c.json(ledger.createCashFlowEvent(c.get("userId"), input), 201);
+  });
+
+  app.put("/api/cash-flow-events/:id", async (c) => {
+    const input = (await c.req.json()) as CashFlowEventInput;
+    const event = ledger.updateCashFlowEvent(c.get("userId"), Number(c.req.param("id")), input);
+    return event ? c.json(event) : c.json({ error: "收益费用事件不存在" }, 404);
+  });
+
+  app.delete("/api/cash-flow-events/:id", (c) => {
+    const ok = ledger.deleteCashFlowEvent(c.get("userId"), Number(c.req.param("id")));
+    return ok ? c.json({ ok: true }) : c.json({ error: "收益费用事件不存在" }, 404);
+  });
+
+  app.get("/api/cash-flows", (c) => {
+    const display = (["USD", "HKD", "CNY"].find((item) => item === c.req.query("display")) ?? "USD") as Currency;
+    return c.json(
+      ledger.unifiedCashFlows(c.get("userId"), {
+        from: c.req.query("from"),
+        to: c.req.query("to"),
+        category: c.req.query("category"),
+        market: c.req.query("market"),
+        symbol: c.req.query("symbol"),
+        display,
+      }),
+    );
+  });
+
   // ---------- trades（手动录入交易） ----------
   app.get("/api/trades", (c) => c.json(portfolio.listTrades(c.get("userId"))));
 
@@ -131,8 +216,8 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
 
   // ---------- 仓别标注 ----------
   app.put("/api/buckets", async (c) => {
-    const { symbol, bucket } = (await c.req.json()) as { symbol: string; bucket: Bucket | null };
-    portfolio.setBucket(c.get("userId"), symbol, bucket ?? null);
+    const { symbol, bucket, market } = (await c.req.json()) as { symbol: string; bucket: Bucket | null; market?: string };
+    portfolio.setBucket(c.get("userId"), symbol, bucket ?? null, market);
     return c.json({ ok: true });
   });
 
@@ -150,6 +235,7 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
   // ---------- summary ----------
   app.get("/api/portfolio/summary", async (c) => {
     const display = (["USD", "HKD", "CNY"].find((d) => d === c.req.query("display")) ?? "USD") as Currency;
+    const scope = c.req.query("scope") === "self" ? ("self" as const) : ("all" as const);
     const refresh = c.req.query("refresh") === "1";
     let quoteMap: Map<string, number> | undefined;
     if (refresh) {
@@ -160,7 +246,27 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
       const fetched = await quotes.getQuotes(pairs);
       quoteMap = new Map(fetched.map((q) => [`${q.market}:${q.symbol}`, q.price]));
     }
-    return c.json(portfolio.summary(c.get("userId"), display, quoteMap));
+    return c.json(portfolio.summary(c.get("userId"), display, quoteMap, scope));
+  });
+
+  // ---------- risk and bucket budgets ----------
+  app.get("/api/risk-settings", (c) => c.json(risk.getSettings(c.get("userId"))));
+
+  app.put("/api/risk-settings", async (c) => {
+    const input = (await c.req.json()) as RiskSettingsInput;
+    return c.json(risk.updateSettings(c.get("userId"), input));
+  });
+
+  app.get("/api/bucket-budgets", (c) => c.json(risk.listBudgets(c.get("userId"), c.req.query("quarter"))));
+
+  app.put("/api/bucket-budgets", async (c) => {
+    const input = (await c.req.json()) as BucketBudgetInput;
+    return c.json(risk.setBudget(c.get("userId"), input));
+  });
+
+  app.post("/api/portfolio/safe-add", async (c) => {
+    const input = (await c.req.json()) as SafeAddInput;
+    return c.json(risk.safeAdd(c.get("userId"), input));
   });
 
   // ---------- quotes ----------
@@ -179,6 +285,16 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
 
   // ---------- plans ----------
   app.get("/api/plans", (c) => c.json(plans.list(c.get("userId"))));
+
+  app.post("/api/plans/preview", async (c) => {
+    const input = (await c.req.json()) as PlanInput;
+    return c.json(plans.preview(c.get("userId"), input));
+  });
+
+  app.post("/api/plans/compare", async (c) => {
+    const input = (await c.req.json()) as { planIds?: number[]; scenarios?: PlanInput[] };
+    return c.json(plans.compare(c.get("userId"), input));
+  });
 
   app.post("/api/plans", async (c) => {
     const input = (await c.req.json()) as PlanInput;

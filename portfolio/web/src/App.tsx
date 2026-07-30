@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { Suspense, createContext, lazy, useContext, useEffect, useState } from "react";
 import {
   Link,
   Navigate,
@@ -14,6 +14,9 @@ import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import HoldingsPage from "./pages/HoldingsPage";
 import PlansPage from "./pages/PlansPage";
+import CashFlowsPage from "./pages/CashFlowsPage";
+
+const DataPage = lazy(() => import("./pages/DataPage"));
 
 interface AuthState {
   me: Me | null;
@@ -80,10 +83,12 @@ function Layout() {
           </Link>
           <nav className="topnav">
             <NavLink to="/" end>
-              资产盘点
+              资产总览
             </NavLink>
-            <NavLink to="/holdings">持仓明细</NavLink>
+            <NavLink to="/holdings">持仓分析</NavLink>
+            <NavLink to="/cashflows">现金流</NavLink>
             <NavLink to="/plans">加仓计划</NavLink>
+            <NavLink to="/data">数据管理</NavLink>
           </nav>
           <div className="user">
             <span>{me.email}</span>
@@ -114,16 +119,25 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "holdings", element: <HoldingsPage /> },
-      { path: "statements", element: <Navigate to="/holdings" replace /> },
+      { path: "cashflows", element: <CashFlowsPage /> },
+      { path: "statements", element: <Navigate to="/data" replace /> },
       { path: "plans", element: <PlansPage /> },
+      {
+        path: "data",
+        element: (
+          <Suspense fallback={<div className="empty"><span className="spin dark" aria-label="正在加载数据管理" /></div>}>
+            <DataPage />
+          </Suspense>
+        ),
+      },
     ],
   },
-]);
+], { future: { v7_relativeSplatPath: true } });
 
 export default function App() {
   return (
     <AuthProvider>
-      <RouterProvider router={router} />
+      <RouterProvider router={router} future={{ v7_startTransition: true }} />
     </AuthProvider>
   );
 }

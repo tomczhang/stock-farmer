@@ -82,7 +82,7 @@ describe("plans API", () => {
     ],
   };
 
-  it("CRUD + 档位成交", async () => {
+  it("CRUD + 数据不完整时拒绝标记档位成交", async () => {
     const ctx = createTestApp();
     const { cookie } = await registerAndLogin(ctx);
 
@@ -123,8 +123,9 @@ describe("plans API", () => {
       `/api/plans/${plan.id}/tiers/${updatedPlan.tiers[0].id}/fill`,
       authedJson(cookie, { filled: true }, "PUT"),
     );
-    const filledPlan = (await fill.json()) as { filledAmount: number };
-    expect(filledPlan.filledAmount).toBe(6000);
+    expect(fill.status).toBe(409);
+    const fillError = (await fill.json()) as { error: string };
+    expect(fillError.error).toContain("安全校验未通过");
 
     // 删除
     const del = await ctx.app.request(`/api/plans/${plan.id}`, {
@@ -138,13 +139,14 @@ describe("plans API", () => {
     expect(list).toHaveLength(0);
   });
 
-  it("总投入超过闲置现金时返回 warning", async () => {
+  it("没有现金和风险上下文时返回不完整而非伪造安全结论", async () => {
     const ctx = createTestApp();
     const { cookie } = await registerAndLogin(ctx);
     // 无任何现金，直接建 2 万美元计划
     const create = await ctx.app.request("/api/plans", authedJson(cookie, PLAN));
-    const plan = (await create.json()) as { warning?: string };
-    expect(plan.warning).toContain("闲置现金");
+    const plan = (await create.json()) as { coverage: { status: string }; final: { safe: boolean } };
+    expect(plan.coverage.status).not.toBe("complete");
+    expect(plan.final.safe).toBe(false);
   });
 
   it("非法档位返回 400；跨用户不可见", async () => {
@@ -155,6 +157,9 @@ describe("plans API", () => {
       authedJson(cookie, { ...PLAN, tiers: [{ seq: 1, triggerType: "bad", triggerValue: 1, allocType: "pct", allocValue: 1 }] }),
     );
     expect(bad.status).toBe(400);
+    const badFee = await ctx.app.request("/api/plans", authedJson(cookie, { ...PLAN, estimatedFee: -1 }));
+    expect(badFee.status).toBe(400);
+    expect(await badFee.json()).toMatchObject({ error: expect.stringContaining("预计交易费") });
 
     await ctx.app.request("/api/plans", authedJson(cookie, PLAN));
     const { cookie: cookie2 } = await registerAndLogin(ctx, "u2@example.com");

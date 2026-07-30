@@ -73,6 +73,8 @@ export interface TradeActivity {
   source: string;
   note?: string;
   excludedFromTaxReplay?: boolean;
+  /** 转仓只有在数据管理页确认数量与单位成本后，才进入外部资本账本。 */
+  capitalConfirmed?: boolean;
 }
 
 export interface TaxStatementSummary {
