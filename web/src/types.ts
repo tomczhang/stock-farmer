@@ -169,6 +169,47 @@ export interface ReportContext {
   rules_version: string;
 }
 
+export interface BottomingSignDimension {
+  key: string;
+  label: string;
+  score: number;
+  detail?: string;
+  [extra: string]: unknown;
+}
+
+export interface BottomingSign {
+  id: string;
+  name: string;
+  /** 大白话别名，如“想跌却跌不动” */
+  plain_name: string;
+  score: number;
+  score_pct: number;
+  state: "absent" | "early" | "clear";
+  state_label: string;
+  description: string;
+  dimensions: BottomingSignDimension[];
+}
+
+export interface BottomingBlock {
+  tier:
+    | "still_falling"
+    | "early_signs"
+    | "base_forming"
+    | "base_ready"
+    | "trend_running";
+  tier_label: string;
+  icon: string;
+  action: string;
+  next_trigger: string;
+  /** 洗盘干净度：结构强度语义，非胜率 / 概率 */
+  cleanliness: number;
+  cleanliness_pct: number;
+  cleanliness_label: string;
+  cleanliness_caption: string;
+  regime?: string;
+  signs: BottomingSign[];
+}
+
 export interface SignalReportResponse {
   ticker: string;
   name: string;
@@ -184,7 +225,11 @@ export interface SignalReportResponse {
     strength_pct: number;
     /** 价格趋势状态：uptrend / downtrend / range / unknown */
     regime?: "uptrend" | "downtrend" | "range" | "unknown";
+    /** 筑底判读档位（conclusion 由筑底判读驱动时存在） */
+    tier?: string;
   };
+  /** 筑底三迹象判读区块；旧 payload 缓存可能缺失，缺失时回退现有结论区渲染 */
+  bottoming?: BottomingBlock | null;
   confirmation: {
     score: number;
     score_pct: number;
@@ -216,4 +261,85 @@ export interface SignalReportResponse {
   report_context: ReportContext;
   right_trend: RightTrend;
   disclaimer: string;
+}
+
+/* ---------- 金字塔交易回测 ---------- */
+
+export interface PyramidTrade {
+  date: string;
+  action: "buy" | "add" | "trim" | "stop_loss";
+  price: number;
+  shares: number;
+  amount: number;
+  fee: number;
+  tier?: number | null;
+  tier_price?: number | null;
+  reason: string;
+}
+
+export interface PyramidEvent {
+  type: string;
+  date: string;
+  reason?: string;
+  [extra: string]: unknown;
+}
+
+export interface PyramidLedgerRow {
+  date: string;
+  close: number;
+  shares: number;
+  net_cost: number | null;
+  invested: number;
+  recovered: number;
+  position_value: number;
+  unrealized: number | null;
+}
+
+export interface PyramidSummary {
+  entered: boolean;
+  not_entered: boolean;
+  invested: number;
+  recovered: number;
+  shares: number;
+  net_cost: number | null;
+  negative_cost: boolean;
+  end_value: number;
+  end_value_note?: string | null;
+  pnl: number;
+  pnl_pct: number | null;
+  stop_buy_triggered: boolean;
+  trim_started: boolean;
+  stop_loss_triggered: boolean;
+  pending_orders: number;
+  reason?: string;
+}
+
+export interface PyramidEntry {
+  signal_date?: string;
+  tier?: string;
+  tier_label?: string;
+  right_green?: string[];
+  cleanliness_pct?: number;
+  fill_price: number | null;
+  support: { price: number; source: string } | null;
+  target: { price: number; source: "technical" | "fallback"; basis: string } | null;
+}
+
+export interface PyramidBacktestResponse {
+  ticker: string;
+  as_of: string;
+  effective_date: string;
+  window: { start: string; end: string; days: number };
+  params: Record<string, unknown> & { stop_buy_progress?: number };
+  entry: PyramidEntry | null;
+  trades: PyramidTrade[];
+  events: PyramidEvent[];
+  pending_orders: Array<{ action: string; reason: string; note: string }>;
+  ledger_series: PyramidLedgerRow[];
+  summary: PyramidSummary;
+  verdict_context: Record<string, unknown> | null;
+  chart_data: { klines: SignalReportPoint[] };
+  assumptions: string[];
+  disclaimer: string;
+  demo?: boolean;
 }

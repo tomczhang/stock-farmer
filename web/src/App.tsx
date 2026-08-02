@@ -2,6 +2,7 @@ import { Component, useCallback, useEffect, useState } from "react";
 import type { ErrorInfo, FormEvent, ReactNode } from "react";
 
 import { ApiError, getSignalReport } from "./api";
+import { PyramidBacktestPanel } from "./components/PyramidBacktestPanel";
 import { SignalTrendReport } from "./components/SignalTrendReport";
 import type { SignalReportResponse } from "./types";
 
@@ -47,6 +48,7 @@ class AppErrorBoundary extends Component<
 }
 
 function AppInner() {
+  const [view, setView] = useState<"signal" | "pyramid">("signal");
   const [input, setInput] = useState("DEMO");
   const [asOfInput, setAsOfInput] = useState("");
   const [ticker, setTicker] = useState("DEMO");
@@ -102,40 +104,69 @@ function AppInner() {
           </div>
         </div>
 
-        <form className="ticker-form" onSubmit={handleSubmit}>
-          <input
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="AAPL 或 0700.HK"
-            aria-label="股票代码"
-            spellCheck={false}
-          />
-          <input
-            type="date"
-            value={asOfInput}
-            onChange={(event) => setAsOfInput(event.target.value)}
-            aria-label="历史复盘日期"
-            title="选择历史日期进行复盘，留空为当前分析"
-          />
-          <button type="submit" className="primary-button" disabled={loading}>
-            分析
+        <div className="segmented-control view-tabs" role="tablist" aria-label="功能切换">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "signal"}
+            className={view === "signal" ? "active" : ""}
+            onClick={() => setView("signal")}
+          >
+            信号报告
           </button>
-          {asOfInput ? (
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={handleClearDate}
-              disabled={loading}
-            >
-              回到当前
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "pyramid"}
+            className={view === "pyramid" ? "active" : ""}
+            onClick={() => setView("pyramid")}
+          >
+            金字塔回测
+          </button>
+        </div>
+
+        {view === "signal" ? (
+          <form className="ticker-form" onSubmit={handleSubmit}>
+            <input
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="AAPL 或 0700.HK"
+              aria-label="股票代码"
+              spellCheck={false}
+            />
+            <input
+              type="date"
+              value={asOfInput}
+              onChange={(event) => setAsOfInput(event.target.value)}
+              aria-label="历史复盘日期"
+              title="选择历史日期进行复盘，留空为当前分析"
+            />
+            <button type="submit" className="primary-button" disabled={loading}>
+              分析
             </button>
-          ) : null}
-        </form>
+            {asOfInput ? (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleClearDate}
+                disabled={loading}
+              >
+                回到当前
+              </button>
+            ) : null}
+          </form>
+        ) : null}
       </header>
 
-      {loading ? <ReportSkeleton ticker={ticker} /> : null}
-      {!loading && error ? <ReportError error={error} ticker={ticker} /> : null}
-      {!loading && !error && report ? <SignalTrendReport report={report} /> : null}
+      {view === "pyramid" ? (
+        <PyramidBacktestPanel />
+      ) : (
+        <>
+          {loading ? <ReportSkeleton ticker={ticker} /> : null}
+          {!loading && error ? <ReportError error={error} ticker={ticker} /> : null}
+          {!loading && !error && report ? <SignalTrendReport report={report} /> : null}
+        </>
+      )}
     </main>
   );
 }

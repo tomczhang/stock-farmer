@@ -19,8 +19,9 @@ from .backtest import (
     parse_as_of,
     resolve_effective_date,
 )
+from .bottoming import BottomingVerdict, _make_sign, compute_bottoming
 from .narrative import generate_narrative
-from .phase import PhaseResult, determine_phase
+from .phase import PhaseResult, _compute_trigger, determine_phase
 from .signals import SignalResult, compute_all_signals
 
 
@@ -116,6 +117,7 @@ def build_signal_report(
         index_df=index_df,
     )
     phase = determine_phase(signals, df=analysis_df)
+    bottoming = compute_bottoming(analysis_df, signals=signals)
 
     name = quote.name if quote and quote.name else ticker
     if historical:
@@ -123,7 +125,7 @@ def build_signal_report(
     else:
         price = quote.price if quote else _last_close(df)
         change_pct = quote.change_pct if quote else None
-    narrative = generate_narrative(ticker, name, signals, phase)
+    narrative = generate_narrative(ticker, name, signals, phase, verdict=bottoming)
 
     right_trend = build_right_trend(
         df,
@@ -167,6 +169,7 @@ def build_signal_report(
         chart_data=chart_data,
         report_context=report_context,
         right_trend=right_trend,
+        bottoming=bottoming,
     )
 
 
@@ -356,8 +359,9 @@ def build_demo_signal_report(ticker: str = "DEMO") -> dict[str, Any]:
         ),
     ]
     phase = determine_phase(signals, df=df)
+    bottoming = _demo_bottoming_verdict()
     name = "右侧趋势演示"
-    narrative = generate_narrative(ticker, name, signals, phase)
+    narrative = generate_narrative(ticker, name, signals, phase, verdict=bottoming)
     effective_date = _last_date(df)
     right_trend = build_right_trend(df, effective_date=effective_date, window=DEFAULT_TREND_WINDOW)
     report_context = build_report_context(
@@ -380,6 +384,60 @@ def build_demo_signal_report(ticker: str = "DEMO") -> dict[str, Any]:
         chart_data={"klines": _records(df), "index_klines": [], "volume_profile": []},
         report_context=report_context,
         right_trend=right_trend,
+        bottoming=bottoming,
+    )
+
+
+def _demo_bottoming_verdict() -> BottomingVerdict:
+    """确定性的筑底判读演示数据，供前端本地开发调试。"""
+    from .bottoming import _TIER_META, compute_cleanliness
+
+    signs = [
+        _make_sign(
+            "vol_dry_up", "缩量下跌", "跌的时候没人卖了", 0.72,
+            "下跌时明显缩量——想卖的人基本卖完了，抛压明显减轻（4/5 项缩量观察达标）",
+            [
+                {"key": "single", "label": "单日缩量", "score": 0.66},
+                {"key": "stage", "label": "阶段缩量", "score": 0.72},
+                {"key": "obvious", "label": "明显缩量", "score": 0.58},
+                {"key": "trend", "label": "趋势缩量", "score": 0.81},
+                {"key": "divergence", "label": "量价背离", "score": 0.0},
+            ],
+        ),
+        _make_sign(
+            "false_break_recover", "假破位收回", "想跌却跌不动", 0.58,
+            "出现假破位：2026-04-08 跌破支撑后2日内收回，砸下去马上被买回来；且近期没有再创新低（跌不动）",
+            [
+                {"key": "false_breakdown", "label": "假破位收回", "score": 0.52,
+                 "detail": "跌破支撑区间 94.20–96.80 后2日收回"},
+                {"key": "no_new_low", "label": "跌不动", "score": 0.74,
+                 "detail": "近5日最低 91.20，未破前低 90.80"},
+            ],
+        ),
+        _make_sign(
+            "chip_stability", "筹码稳定", "洗盘洗干净了", 0.75,
+            "筹码峰稳定在 95.60 附近没有下移，且量能处于自身历史低位——套牢盘没有割肉，浮筹已清洗",
+            [
+                {"key": "chip_peak_hold", "label": "筹码峰不下移", "score": 0.92,
+                 "recent_peak": 95.6, "prev_peak": 95.2},
+                {"key": "low_turnover", "label": "低换手（量能分位）", "score": 0.5,
+                 "turnover_quantile": 0.32,
+                 "detail": "当前20日均量处于自身近250日量能分位 32%"},
+            ],
+        ),
+    ]
+    cleanliness = compute_cleanliness(signs)
+    meta = _TIER_META["base_forming"]
+    return BottomingVerdict(
+        tier="base_forming",
+        tier_label=meta["label"],
+        icon=meta["icon"],
+        action=meta["action"],
+        next_trigger="等待右侧触发：放量站上 MA20 / 放量反包 / 回踩支撑不破",
+        cleanliness=cleanliness,
+        cleanliness_pct=int(round(cleanliness * 100)),
+        signs=signs,
+        regime="range",
     )
 
 
@@ -395,6 +453,7 @@ def make_report_payload(
     chart_data: dict[str, Any],
     report_context: dict[str, Any] | None = None,
     right_trend: dict[str, Any] | None = None,
+    bottoming: BottomingVerdict | None = None,
 ) -> dict[str, Any]:
     left = [s for s in signals if s.category == "left"]
     right = [s for s in signals if s.category == "right"]
@@ -411,13 +470,20 @@ def make_report_payload(
     )
     total_weight = left_summary["weight"] + right_summary["weight"]
 
+    conclusion = (
+        _conclusion_from_bottoming(bottoming, right, phase)
+        if bottoming is not None
+        else asdict(phase)
+    )
+
     return {
         "ticker": ticker.upper(),
         "name": name,
         "price": _finite_or_none(price),
         "change_pct": _finite_or_none(change_pct),
         "analyzed_at": datetime.now().isoformat(timespec="seconds"),
-        "conclusion": asdict(phase),
+        "conclusion": conclusion,
+        "bottoming": _bottoming_payload(bottoming) if bottoming is not None else None,
         "confirmation": {
             "score": phase.strength,
             "score_pct": phase.strength_pct,
@@ -439,6 +505,53 @@ def make_report_payload(
         "report_context": report_context or _current_report_context(),
         "right_trend": right_trend or {"window": DEFAULT_TREND_WINDOW, "points": []},
         "disclaimer": "仅供研究复盘，不构成投资建议。",
+    }
+
+
+def _conclusion_from_bottoming(
+    verdict: BottomingVerdict,
+    right_signals: list[SignalResult],
+    phase: PhaseResult,
+) -> dict[str, Any]:
+    """结论区由筑底判读驱动，字段形状与原 PhaseResult 保持一致。
+
+    strength 仍为 11 信号结构强度（与 confirmation.score 同源），
+    筑底自身的洗盘干净度在 bottoming 区块内单独给出。
+    """
+    trigger = verdict.next_trigger
+    # 筑底已成立时，下一步看右侧触发——复用现有右侧触发择优逻辑。
+    if verdict.tier in ("base_forming", "base_ready") and right_signals:
+        trigger = _compute_trigger(right_signals, phase.phase)
+    return {
+        "phase": verdict.tier_label,
+        "icon": verdict.icon,
+        "action": verdict.action,
+        "trigger": trigger,
+        "strength": phase.strength,
+        "strength_pct": phase.strength_pct,
+        "regime": verdict.regime,
+        "tier": verdict.tier,
+    }
+
+
+def _bottoming_payload(verdict: BottomingVerdict) -> dict[str, Any]:
+    signs = []
+    for sign in verdict.signs:
+        payload = asdict(sign)
+        payload["score_pct"] = int(round(sign.score * 100))
+        signs.append(payload)
+    return {
+        "tier": verdict.tier,
+        "tier_label": verdict.tier_label,
+        "icon": verdict.icon,
+        "action": verdict.action,
+        "next_trigger": verdict.next_trigger,
+        "cleanliness": verdict.cleanliness,
+        "cleanliness_pct": verdict.cleanliness_pct,
+        "cleanliness_label": "洗盘干净度",
+        "cleanliness_caption": "洗盘干净度代表筑底结构强度，不代表准确率、胜率或上涨概率。",
+        "regime": verdict.regime,
+        "signs": signs,
     }
 
 

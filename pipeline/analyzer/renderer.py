@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
+from .bottoming import BottomingSign, BottomingVerdict
 from .phase import PhaseResult
 from .signals import SignalResult
 
@@ -183,6 +184,7 @@ def render_html(
     chart_data: dict | None = None,
     report_context: dict | None = None,
     right_trend: dict | None = None,
+    bottoming: BottomingVerdict | None = None,
 ) -> str:
     """渲染完整 HTML 报告。
 
@@ -193,6 +195,7 @@ def render_html(
     }
     report_context: 历史复盘元数据（mode / requested_as_of / effective_date / ...，可选）。
     right_trend: {"window": N, "points": [...]} 右侧趋势证伪镜序列（可选）。
+    bottoming: 筑底三迹象判读结果，提供时在首屏渲染筑底判读区块。
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     klines = (chart_data or {}).get("klines") or []
@@ -222,6 +225,7 @@ def render_html(
     hero_html = _render_hero(phase, confirmation)
     trend_fit_banner = _render_trend_fit(phase)
     context_banner = _render_context_banner(report_context)
+    bottoming_html = _render_bottoming(bottoming) if bottoming is not None else ""
     semantics_html = _render_score_semantics(confirmation)
     mirror_html = _render_trend_mirror(right_trend)
     left_panel = _render_signal_group_panel("left", left_signals, confirmation["left"], 0)
@@ -283,6 +287,9 @@ def render_html(
     <!-- 历史复盘 / 当前分析 上下文 -->
     {context_banner}
 
+    <!-- 筑底迹象判读（首屏主结论） -->
+    {bottoming_html}
+
     <!-- Hero: 圆环 + 加权公式 + 趋势主图 -->
     {hero_html}
 
@@ -306,10 +313,10 @@ def render_html(
       </div>
     </section>
 
-    <!-- Signal Groups: 左右双大卡 -->
+    <!-- Signal Groups: 出手时机确认（右侧）优先，左侧降为明细参考 -->
     <div class="signal-groups-grid gap-6 items-start mb-6">
-      {left_panel}
       {right_panel}
+      {left_panel}
     </div>
 
     <!-- 子信号明细表 + tabs -->
@@ -1550,6 +1557,80 @@ def _render_hero_formula(conf: dict) -> str:
 </div>"""
 
 
+_BOTTOMING_STATE_STYLES = {
+    # state -> (主色, 芯片背景)
+    "absent": ("var(--color-default)", "var(--color-default-100)"),
+    "early": ("var(--color-warning)", "var(--color-warning-100)"),
+    "clear": ("var(--color-success)", "var(--color-success-100)"),
+}
+
+
+def _render_bottoming_sign_card(sign: BottomingSign) -> str:
+    """单张筑底迹象卡片：状态灯 + 得分 + 大白话证据 + 子维度小字。"""
+    color, chip_bg = _BOTTOMING_STATE_STYLES.get(sign.state, _BOTTOMING_STATE_STYLES["absent"])
+    score_pct = int(round(sign.score * 100))
+    dim_chips = "".join(
+        f'<span class="text-[10px] px-1.5 py-0.5 rounded-full" '
+        f'style="background: var(--color-surface); border: 1px solid var(--color-divider); color: var(--text-muted);">'
+        f'{d.get("label", d.get("key", ""))} {int(round(float(d.get("score", 0) or 0) * 100))}%</span>'
+        for d in sign.dimensions
+    )
+    dims_html = (
+        f'<div class="mt-2.5 flex flex-wrap gap-1">{dim_chips}</div>' if dim_chips else ""
+    )
+    return f"""<div class="rounded-xl p-4 bottoming-sign-card" data-sign="{sign.id}"
+     style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider); border-top: 3px solid {color};">
+  <div class="flex items-start justify-between gap-2">
+    <div>
+      <div class="text-sm font-semibold" style="color: var(--text-primary);">{sign.name}</div>
+      <div class="text-[11px] mt-0.5" style="color: var(--text-muted);">“{sign.plain_name}”</div>
+    </div>
+    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap"
+          style="background: {chip_bg}; color: {color};">{sign.state_label} · {score_pct}%</span>
+  </div>
+  <p class="text-xs mt-2 leading-relaxed" style="color: var(--text-secondary);">{sign.description}</p>
+  {dims_html}
+</div>"""
+
+
+def _render_bottoming(verdict: BottomingVerdict) -> str:
+    """首屏筑底判读区块：结论横幅 + 洗盘干净度 + 三迹象卡片。"""
+    pct = max(0, min(100, int(verdict.cleanliness_pct)))
+    bar_color = _hero_strength_color_var(pct)
+    cards = "\n".join(_render_bottoming_sign_card(s) for s in verdict.signs)
+    return f"""<section id="bottoming" class="rounded-2xl p-5 mb-6"
+         style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
+  <header class="flex flex-wrap items-start justify-between gap-4 mb-4">
+    <div>
+      <div class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted);">筑底迹象判读</div>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-2xl leading-none">{verdict.icon}</span>
+        <h2 class="text-xl font-bold" style="color: var(--text-primary);">{verdict.tier_label}</h2>
+      </div>
+      <p class="text-xs mt-1.5 leading-relaxed" style="color: var(--text-secondary);">{verdict.action}</p>
+    </div>
+    <div class="w-full md:w-56">
+      <div class="flex items-center justify-between text-xs" style="color: var(--text-secondary);">
+        <span>洗盘干净度</span>
+        <strong class="tabular-nums" style="color: var(--text-primary);">{pct}%</strong>
+      </div>
+      <div class="h-1.5 rounded-full overflow-hidden mt-1.5" style="background: var(--color-default-100);">
+        <div class="h-full rounded-full" style="width: {pct}%; background: {bar_color};"></div>
+      </div>
+      <p class="text-[10px] mt-1.5 leading-relaxed" style="color: var(--text-muted);">代表筑底结构强度，不代表准确率、胜率或上涨概率</p>
+    </div>
+  </header>
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {cards}
+  </div>
+  <div class="mt-4 rounded-xl px-4 py-3 text-xs flex items-center gap-2"
+       style="background: var(--color-surface-secondary); border: 1px solid var(--color-divider); color: var(--text-secondary);">
+    <span class="text-[11px] uppercase tracking-wider whitespace-nowrap" style="color: var(--text-muted);">下一步</span>
+    <strong style="color: var(--text-primary);">{verdict.next_trigger}</strong>
+  </div>
+</section>"""
+
+
 def _render_hero(phase: PhaseResult, conf: dict) -> str:
     """Hero 双栏:左 1/3 圆环+phase+公式;右 2/3 lightweight-charts 主图容器。"""
     circle = _render_hero_circle(phase)
@@ -1790,7 +1871,7 @@ def _render_signal_group_panel(
     idx_offset: int,
 ) -> str:
     """单侧大卡:头部 + 信号列表(details 行)。"""
-    side_label = "左侧信号" if side == "left" else "右侧信号"
+    side_label = "左侧信号 · 明细参考" if side == "left" else "右侧信号 · 出手时机确认"
     rows = "\n".join(
         _render_signal_row(s, i + idx_offset, side) for i, s in enumerate(signals)
     )

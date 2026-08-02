@@ -60,6 +60,7 @@ button { font-family: inherit; }
 .topnav a:hover { color: var(--ink); background: var(--bg-muted); }
 .topnav a.active { color: var(--ink); background: var(--brand-bg); }
 .topbar .user { font-size: 12px; color: var(--ink-3); display: flex; align-items: center; gap: 10px; }
+.privacy-btn.privacy-on { background: var(--brand-bg); border-color: var(--brand-border); color: var(--ink); }
 
 .page { max-width: min(1600px, 96vw); margin: 0 auto; padding: 28px 24px 64px; }
 .page-title { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
@@ -268,6 +269,30 @@ button { font-family: inherit; }
   background: #fff; color: var(--ink); font-weight: 700; box-shadow: var(--shadow-sm);
 }
 .section-card { margin-top: 16px; }
+
+/* 个人笔记本 */
+.note-editor { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.65; resize: vertical; }
+.note-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.note-title-btn {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; text-align: left;
+  background: none; border: none; cursor: pointer; padding: 0; font-family: inherit;
+  font-size: 14px; color: var(--ink);
+}
+.note-title-btn b { font-weight: 700; }
+.note-meta { font-size: 11px; color: var(--ink-4); font-weight: 400; }
+.note-content {
+  margin-top: 14px; padding: 4px 18px 14px; background: var(--bg-muted); border-radius: 9px;
+  font-size: 13px; line-height: 1.7; color: var(--ink-2);
+}
+.note-h { font-size: 13px; font-weight: 800; color: var(--ink); margin: 16px 0 6px; }
+.note-p { margin: 6px 0; }
+.note-list { margin: 4px 0 8px; padding-left: 20px; }
+.note-list li { margin: 3px 0; }
+.note-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 8px 0 10px; background: #fff; border-radius: 7px; overflow: hidden; }
+.note-table th { text-align: left; font-size: 11px; font-weight: 700; color: var(--ink-4); padding: 7px 10px; border-bottom: 1px solid var(--border); background: var(--bg-muted); }
+.note-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.note-table tr:last-child td { border-bottom: none; }
+.note-caret { color: var(--ink-4); font-size: 11px; width: 12px; flex-shrink: 0; }
 .helper-text { font-size: 11px; color: var(--ink-4); margin-top: 10px; }
 .full-width { width: 100%; }
 .empty-action { margin-top: 14px; }

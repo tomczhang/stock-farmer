@@ -296,11 +296,15 @@ class TestBuildSignalReportHistorical:
         report = build_signal_report("TEST", as_of=eff)
         cut = cutoff_daily(df, eff)
         index_cut = cutoff_daily(df, eff)  # 假数据中 SPY 与个股同源
-        expected = determine_phase(
-            compute_all_signals(cut, volume_profile=[], index_df=index_cut)
-        )
+        cut_signals = compute_all_signals(cut, volume_profile=[], index_df=index_cut)
+        expected = determine_phase(cut_signals)
         assert report["confirmation"]["score_pct"] == expected.strength_pct
-        assert report["conclusion"]["phase"] == expected.phase
+        # 结论区由筑底判读驱动，同样不得含未来数据。
+        from analyzer.bottoming import compute_bottoming
+        expected_verdict = compute_bottoming(cut, signals=cut_signals)
+        assert report["conclusion"]["phase"] == expected_verdict.tier_label
+        assert report["bottoming"]["tier"] == expected_verdict.tier
+        assert report["bottoming"]["cleanliness_pct"] == expected_verdict.cleanliness_pct
 
     def test_out_of_range_raises(self, patched_data):
         with pytest.raises(AsOfOutOfRange):
@@ -331,7 +335,7 @@ class TestPayloadExamples:
 
     _TOP_KEYS = {
         "ticker", "name", "price", "change_pct", "analyzed_at", "conclusion",
-        "confirmation", "signals", "groups", "narrative", "chart_data",
+        "bottoming", "confirmation", "signals", "groups", "narrative", "chart_data",
         "report_context", "right_trend", "disclaimer",
     }
 
@@ -341,6 +345,16 @@ class TestPayloadExamples:
         assert self._TOP_KEYS.issubset(report.keys())
         assert report["report_context"]["mode"] == "current"
         assert "points" in report["right_trend"]
+        # 筑底判读区块：三迹象固定顺序 + 洗盘干净度结构强度语义
+        bot = report["bottoming"]
+        assert [s["id"] for s in bot["signs"]] == [
+            "vol_dry_up", "false_break_recover", "chip_stability",
+        ]
+        assert bot["cleanliness_label"] == "洗盘干净度"
+        assert "结构强度" in bot["cleanliness_caption"]
+        for sign in bot["signs"]:
+            assert sign["state"] in ("absent", "early", "clear")
+            assert sign["state_label"] in ("未出现", "初现", "明显")
         # 整个 payload 必须可 JSON 序列化。
         json.dumps(report, ensure_ascii=False, default=str)
 

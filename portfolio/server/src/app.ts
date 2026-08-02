@@ -323,5 +323,48 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
     return plan ? c.json(plan) : c.json({ error: "计划或档位不存在" }, 404);
   });
 
+  // ---------- notes（个人笔记本） ----------
+  const noteRow = (row: Record<string, unknown>) => ({
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    pinned: !!row.pinned,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+
+  app.get("/api/notes", (c) => {
+    const rows = db
+      .prepare("SELECT * FROM notes WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC")
+      .all(c.get("userId")) as Array<Record<string, unknown>>;
+    return c.json(rows.map(noteRow));
+  });
+
+  app.post("/api/notes", async (c) => {
+    const { title, content, pinned } = (await c.req.json()) as { title?: string; content?: string; pinned?: boolean };
+    if (!title?.trim()) return c.json({ error: "笔记标题不能为空" }, 400);
+    const result = db
+      .prepare("INSERT INTO notes (user_id, title, content, pinned) VALUES (?, ?, ?, ?)")
+      .run(c.get("userId"), title.trim(), content ?? "", pinned ? 1 : 0);
+    const row = db.prepare("SELECT * FROM notes WHERE id = ?").get(Number(result.lastInsertRowid)) as Record<string, unknown>;
+    return c.json(noteRow(row), 201);
+  });
+
+  app.put("/api/notes/:id", async (c) => {
+    const { title, content, pinned } = (await c.req.json()) as { title?: string; content?: string; pinned?: boolean };
+    if (!title?.trim()) return c.json({ error: "笔记标题不能为空" }, 400);
+    const result = db
+      .prepare("UPDATE notes SET title = ?, content = ?, pinned = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?")
+      .run(title.trim(), content ?? "", pinned ? 1 : 0, Number(c.req.param("id")), c.get("userId"));
+    if (result.changes === 0) return c.json({ error: "笔记不存在" }, 404);
+    const row = db.prepare("SELECT * FROM notes WHERE id = ?").get(Number(c.req.param("id"))) as Record<string, unknown>;
+    return c.json(noteRow(row));
+  });
+
+  app.delete("/api/notes/:id", (c) => {
+    const ok = db.prepare("DELETE FROM notes WHERE id = ? AND user_id = ?").run(Number(c.req.param("id")), c.get("userId")).changes > 0;
+    return ok ? c.json({ ok: true }) : c.json({ error: "笔记不存在" }, 404);
+  });
+
   return app;
 }

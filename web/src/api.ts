@@ -7,6 +7,7 @@ import type {
   HealthResponse,
   Market,
   PEHistoryResponse,
+  PyramidBacktestResponse,
   SignalReportResponse,
   TimeRange,
   WatchlistItem,
@@ -127,5 +128,21 @@ export function getSignalReport(
   const query = params.toString();
   return request<SignalReportResponse>(
     `/api/signal-report/${encoded}${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getPyramidBacktest(
+  ticker: string,
+  options: { demo?: boolean; asOf?: string | null; window?: number; budget?: number } = {},
+): Promise<PyramidBacktestResponse> {
+  const encoded = encodeURIComponent(ticker);
+  const params = new URLSearchParams();
+  if (options.demo) params.set("demo", "1");
+  if (options.asOf) params.set("as_of", options.asOf);
+  if (options.window) params.set("window", String(options.window));
+  if (options.budget) params.set("budget", String(options.budget));
+  const query = params.toString();
+  return request<PyramidBacktestResponse>(
+    `/api/pyramid-backtest/${encoded}${query ? `?${query}` : ""}`,
   );
 }

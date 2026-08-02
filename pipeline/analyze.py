@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from analyzer.signals import compute_all_signals
 from analyzer.phase import determine_phase
+from analyzer.bottoming import compute_bottoming
 from analyzer.narrative import generate_narrative
 from analyzer.renderer import render_html
 from analyzer.backtest import (
@@ -177,6 +178,9 @@ def analyze(
     # 阶段判断
     phase = determine_phase(signals, df=analysis_df)
 
+    # 筑底三迹象判读
+    bottoming = compute_bottoming(analysis_df, signals=signals)
+
     # 生成综述
     name = quote.name if quote and quote.name else ticker
     if historical:
@@ -184,7 +188,7 @@ def analyze(
     else:
         price = quote.price if quote else (float(df["close"].iloc[-1]) if len(df) > 0 else None)
         change_pct = quote.change_pct if quote else None
-    narrative = generate_narrative(ticker, name, signals, phase)
+    narrative = generate_narrative(ticker, name, signals, phase, verdict=bottoming)
 
     # 右侧趋势序列（证伪镜）+ 历史元数据
     print("  构建右侧趋势序列...")
@@ -220,6 +224,7 @@ def analyze(
         chart_data=chart_data,
         report_context=report_context,
         right_trend=right_trend,
+        bottoming=bottoming,
     )
 
     # 保存

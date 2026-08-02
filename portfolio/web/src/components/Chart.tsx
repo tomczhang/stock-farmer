@@ -59,11 +59,28 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// ---------- 防窥模式：隐藏具体金额，保留百分比 ----------
+const PRIVACY_KEY = "sf_privacy";
+let privacyHidden = typeof localStorage !== "undefined" && localStorage.getItem(PRIVACY_KEY) === "1";
+
+export function isPrivacyOn() {
+  return privacyHidden;
+}
+
+export function setPrivacy(value: boolean) {
+  privacyHidden = value;
+  localStorage.setItem(PRIVACY_KEY, value ? "1" : "0");
+}
+
+const MASK = "∗∗∗∗";
+
 export function fmtMoney(value: number, digits = 2) {
+  if (privacyHidden) return MASK;
   return value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 export function fmtCompact(value: number) {
+  if (privacyHidden) return MASK;
   const abs = Math.abs(value);
   if (abs >= 1e8) return `${(value / 1e8).toFixed(2)}亿`;
   if (abs >= 1e4) return `${(value / 1e4).toFixed(1)}万`;

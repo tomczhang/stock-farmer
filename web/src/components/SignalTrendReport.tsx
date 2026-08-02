@@ -8,6 +8,7 @@ import type {
   SignalReportResponse,
   SignalReportSignal,
 } from "../types";
+import { BottomingVerdictPanel } from "./BottomingVerdictPanel";
 
 interface SignalTrendReportProps {
   report: SignalReportResponse;
@@ -47,6 +48,11 @@ export function SignalTrendReport({ report }: SignalTrendReportProps) {
         <TrendFitBanner report={report} />
         <ReportContextBanner report={report} />
 
+        {/* 筑底迹象判读：首屏主结论；旧 payload 缓存无 bottoming 时回退现有结论区 */}
+        {report.bottoming ? (
+          <BottomingVerdictPanel bottoming={report.bottoming} />
+        ) : null}
+
         <div className="hero-grid">
           <ConfirmationPanel report={report} />
           <TrendChart report={report} />
@@ -67,13 +73,16 @@ export function SignalTrendReport({ report }: SignalTrendReportProps) {
       <RightTrendMirror report={report} />
 
       <section className="group-grid">
-        <SignalGroupPanel
-          summary={report.confirmation.left}
-          signals={report.groups.left}
-        />
+        {/* 出手时机确认（右侧）优先，左侧降为明细参考 */}
         <SignalGroupPanel
           summary={report.confirmation.right}
           signals={report.groups.right}
+          heading="出手时机确认"
+        />
+        <SignalGroupPanel
+          summary={report.confirmation.left}
+          signals={report.groups.left}
+          heading="明细参考"
         />
       </section>
 
@@ -470,15 +479,19 @@ function formatForward(fwd: ForwardOutcomeLabels): string {
 function SignalGroupPanel({
   summary,
   signals,
+  heading,
 }: {
   summary: SignalReportGroupSummary;
   signals: SignalReportSignal[];
+  heading?: string;
 }) {
   return (
     <article className="group-panel">
       <div className="panel-title-row">
         <div>
-          <span className="section-label">{summary.label}</span>
+          <span className="section-label">
+            {heading ? `${summary.label} · ${heading}` : summary.label}
+          </span>
           <h2>
             {summary.score_pct}% <small>加权分</small>
           </h2>

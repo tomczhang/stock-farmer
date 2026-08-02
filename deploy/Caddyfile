@@ -1,0 +1,12 @@
+{$DOMAIN} {
+	encode gzip
+
+	# （可选）Basic Auth 访问控制，当前默认关闭。
+	# 需要开启时：取消下面注释，并在 .env 里配置 BASIC_AUTH_USER / BASIC_AUTH_HASH
+	# （hash 生成：docker run --rm caddy:2-alpine caddy hash-password --plaintext '你的密码'）
+	# basic_auth {
+	# 	{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	# }
+
+	reverse_proxy app:8765
+}

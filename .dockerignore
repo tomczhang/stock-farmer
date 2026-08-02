@@ -1,0 +1,21 @@
+# deploy/Dockerfile 构建上下文（仓库根）裁剪
+.git
+.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+web/dist
+web/tsconfig.tsbuildinfo
+pipeline/output
+portfolio
+api
+openspec
+pages
+scripts
+db
+.agents
+.claude
+.codex
+.github
+*.md
+!deploy/README.md

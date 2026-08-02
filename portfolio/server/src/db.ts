@@ -254,6 +254,21 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
       ALTER TABLE pyramid_plans ADD COLUMN estimated_fee REAL NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        pinned INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_notes_user ON notes(user_id, pinned DESC, updated_at DESC);
+    `,
+  },
 ];
 
 export type AppDatabase = Database.Database;

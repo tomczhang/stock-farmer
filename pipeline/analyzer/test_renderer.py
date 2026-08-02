@@ -816,3 +816,63 @@ def test_render_html_backward_compatible_without_new_params():
     assert 'id="chart-trend-mirror"' not in html
     # 不应渲染历史复盘徽章（HTML 注释里出现"历史复盘"不算）。
     assert ">历史复盘</span>" not in html
+
+
+# ---------------- 筑底判读区块 ----------------
+
+def _make_verdict():
+    from pipeline.analyzer.bottoming import BottomingVerdict, _TIER_META, _make_sign
+
+    signs = [
+        _make_sign("vol_dry_up", "缩量下跌", "跌的时候没人卖了", 0.72,
+                   "下跌时明显缩量", [{"key": "stage", "label": "阶段缩量", "score": 0.7}]),
+        _make_sign("false_break_recover", "假破位收回", "想跌却跌不动", 0.58,
+                   "出现假破位后收回", []),
+        _make_sign("chip_stability", "筹码稳定", "洗盘洗干净了", 0.75,
+                   "筹码峰未下移", []),
+    ]
+    meta = _TIER_META["base_forming"]
+    return BottomingVerdict(
+        tier="base_forming", tier_label=meta["label"], icon=meta["icon"],
+        action=meta["action"], next_trigger="等待右侧触发",
+        cleanliness=0.66, cleanliness_pct=66, signs=signs, regime="range",
+    )
+
+
+def test_render_html_bottoming_section_first_screen():
+    """筑底判读区块在首屏：结论 + 三迹象卡片 + 洗盘干净度，且排在 hero 之前。"""
+    html = render_html(
+        "AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "n",
+        bottoming=_make_verdict(),
+    )
+    assert "筑底迹象判读" in html
+    assert "筑底基本成立" in html
+    assert "洗盘干净度" in html
+    assert html.count("bottoming-sign-card") == 3
+    for name in ("缩量下跌", "假破位收回", "筹码稳定"):
+        assert name in html
+    # 首屏顺序：筑底区块在 hero 主图之前
+    assert html.index('id="bottoming"') < html.index('id="chart-hero"')
+
+
+def test_render_html_bottoming_semantics_red_lines():
+    """洗盘干净度必须标注结构强度语义，不得声称胜率/概率。"""
+    html = render_html(
+        "AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "n",
+        bottoming=_make_verdict(),
+    )
+    assert "代表筑底结构强度，不代表准确率、胜率或上涨概率" in html
+
+
+def test_render_html_no_bottoming_when_absent():
+    """不传 bottoming 时不渲染筑底区块（向后兼容）。"""
+    html = render_html("AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "n")
+    assert 'id="bottoming"' not in html
+
+
+def test_render_html_right_panel_labeled_and_first():
+    """右侧面板重命名为出手时机确认并排在左侧明细之前。"""
+    html = render_html("AAPL", "Apple", 200.0, 1.5, _make_signals(), _make_phase(), "n")
+    assert "右侧信号 · 出手时机确认" in html
+    assert "左侧信号 · 明细参考" in html
+    assert html.index("右侧信号 · 出手时机确认") < html.index("左侧信号 · 明细参考")

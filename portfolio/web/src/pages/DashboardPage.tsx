@@ -2,7 +2,7 @@ import type { EChartsOption } from "echarts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Chart, fmtMoney, gradientBarVertical, LIGHT_TOOLTIP, PALETTE } from "../components/Chart";
+import { Chart, fmtCompact, fmtMoney, gradientBarVertical, LIGHT_TOOLTIP, PALETTE } from "../components/Chart";
 import { describeCoverageItems } from "../lib/portfolio/coverage";
 import { aggregateSummaryPositions } from "../lib/portfolio/positions";
 import { BUCKET_LABELS, type BucketBudget, type Currency, type RiskSettings, type Summary } from "../types";
@@ -141,11 +141,11 @@ export default function DashboardPage() {
   const historyOption = useMemo<EChartsOption>(() => {
     if (!summary) return {};
     return {
-      tooltip: { ...LIGHT_TOOLTIP, trigger: "axis" },
+      tooltip: { ...LIGHT_TOOLTIP, trigger: "axis", valueFormatter: (value: unknown) => (typeof value === "number" ? `${sign}${fmtMoney(value, 0)}` : "—") },
       legend: { top: 0, textStyle: { color: "#64748b", fontSize: 11 } },
       grid: { left: 10, right: 10, top: 34, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: summary.history.map((point) => point.month), axisLabel: { color: "#64748b", fontSize: 10 }, axisLine: { lineStyle: { color: "#e2e8f0" } }, axisTick: { show: false } },
-      yAxis: { type: "value", axisLabel: { color: "#94a3b8", fontSize: 10 }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
+      yAxis: { type: "value", axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (value: number) => fmtCompact(value) }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
       series: [
         {
           name: "盈亏",

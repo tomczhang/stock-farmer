@@ -998,3 +998,398 @@ button {
   margin: 6px 0 0;
   line-height: 1.5;
 }
+
+/* ---------- 筑底迹象判读（首屏主结论） ---------- */
+
+.bottoming-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  padding: 18px;
+  margin-bottom: 16px;
+}
+
+.bottoming-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.bottoming-verdict h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 780;
+}
+
+.bottoming-icon {
+  margin-right: 8px;
+}
+
+.bottoming-action {
+  margin: 6px 0 0;
+  color: var(--muted);
+  max-width: 560px;
+}
+
+.cleanliness-meter {
+  width: 230px;
+  min-width: 180px;
+}
+
+.cleanliness-meter .meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cleanliness-meter .meter-head strong {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--text);
+}
+
+.cleanliness-caption {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.bottoming-signs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.bottoming-sign-card {
+  border: 1px solid var(--border-soft);
+  border-top: 3px solid var(--default);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 14px;
+}
+
+.bottoming-sign-card.warning {
+  border-top-color: var(--warning);
+}
+
+.bottoming-sign-card.success {
+  border-top-color: var(--success);
+}
+
+.bottoming-sign-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bottoming-sign-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.bottoming-sign-head .plain-name {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.bottoming-sign-head .status-chip {
+  white-space: nowrap;
+}
+
+.bottoming-sign-desc {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.bottoming-dims {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.bottoming-dims span {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  color: var(--faint);
+}
+
+.bottoming-next {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.bottoming-next strong {
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .bottoming-signs {
+    grid-template-columns: 1fr;
+  }
+
+  .cleanliness-meter {
+    width: 100%;
+  }
+}
+
+/* ---------- 金字塔交易回测 ---------- */
+
+.view-tabs {
+  flex-shrink: 0;
+}
+
+.pyramid-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pyramid-form-card,
+.pyramid-summary,
+.pyramid-entry,
+.pyramid-events,
+.pyramid-chart {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  padding: 18px;
+}
+
+.pyramid-form-card {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pyramid-form-card h2 {
+  margin: 4px 0 0;
+  font-size: 19px;
+  font-weight: 780;
+}
+
+.pyramid-form-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 520px;
+}
+
+.pyramid-window-input {
+  width: 110px;
+}
+
+.pyramid-summary {
+  border-left: 4px solid var(--default);
+}
+
+.pyramid-summary.success {
+  border-left-color: var(--success);
+}
+
+.pyramid-summary.danger {
+  border-left-color: var(--danger);
+}
+
+.pyramid-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pyramid-summary h2 {
+  margin: 4px 0 0;
+  font-size: 21px;
+  font-weight: 780;
+}
+
+.pyramid-flags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pyramid-flags .flag {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.pyramid-flags .flag.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.pyramid-flags .flag.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.pyramid-flags .flag.success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.pyramid-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.pyramid-metric {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 10px 12px;
+}
+
+.pyramid-metric span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pyramid-metric strong {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.pyramid-assumptions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 10px 14px;
+}
+
+.pyramid-assumptions .section-label {
+  display: inline;
+}
+
+.assumption-chip {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.pyramid-disclaimer {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.pyramid-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pyramid-entry-grid strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.pyramid-entry-grid small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.pyramid-events ul {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pyramid-events li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px dashed var(--border-soft);
+  font-size: 12px;
+}
+
+.pyramid-events .event-date {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pyramid-events .event-reason {
+  color: var(--muted);
+}
+
+.trade-chip {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.trade-chip.buy,
+.trade-chip.add {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.trade-chip.trim {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.trade-chip.stop_loss {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (max-width: 900px) {
+  .pyramid-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pyramid-entry-grid {
+    grid-template-columns: 1fr;
+  }
+}

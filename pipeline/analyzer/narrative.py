@@ -1,8 +1,60 @@
 """综述文本生成（模板拼接，非 LLM）。"""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .phase import PhaseResult
 from .signals import SignalResult
+
+if TYPE_CHECKING:
+    from .bottoming import BottomingVerdict
+
+
+_TIER_NARRATIVE = {
+    "still_falling": "仍在下跌，筑底三迹象均未出现——跌势尚未止住，想跌还能跌",
+    "early_signs": "开始出现筑底迹象，但「想跌却跌不动」的特征还不完整",
+    "base_forming": "筑底迹象基本具备，洗盘接近干净，进入等待右侧触发的阶段",
+    "base_ready": "筑底三迹象齐备，洗盘已基本干净，进入等待右侧出手点阶段",
+}
+
+
+def _bottoming_narrative(
+    ticker: str,
+    name: str,
+    signals: list[SignalResult],
+    verdict: "BottomingVerdict",
+) -> str:
+    if verdict.tier == "trend_running":
+        return (
+            f"{ticker} ({name}) 当前已经处于上升趋势中。"
+            "本工具专注于判读筑底迹象（缩量下跌、假破位收回、筹码稳定），"
+            "趋势中途的个股天然不会触发这些迹象——当前低分代表“不是筑底买点”，并非看空。"
+            f"建议：{verdict.action}。{verdict.next_trigger}。"
+        )
+
+    sent1 = f"{ticker} ({name}) 当前{_TIER_NARRATIVE.get(verdict.tier, '状态待定')}。"
+
+    signs_txt = "、".join(f"{s.name}「{s.state_label}」" for s in verdict.signs)
+    sent2 = (
+        f"三项筑底迹象：{signs_txt}；"
+        f"洗盘干净度 {verdict.cleanliness_pct}%（结构强度口径，不代表上涨把握）。"
+    )
+
+    # 出手时机层：右侧触发信号就绪状态
+    right = [s for s in signals if s.category == "right"]
+    right_green = [s for s in right if s.light == "green"]
+    right_yellow = [s for s in right if s.light == "yellow"]
+    if right_green:
+        names = "、".join(s.name for s in right_green[:3])
+        sent3 = f"出手时机方面，{names}已触发。"
+    elif right_yellow:
+        names = "、".join(s.name for s in right_yellow[:2])
+        sent3 = f"出手时机方面，{names}正在酝酿但尚未触发。"
+    else:
+        sent3 = "出手时机方面，右侧触发信号尚未出现。"
+
+    sent4 = f"建议：{verdict.action}。{verdict.next_trigger}。"
+    return f"{sent1}{sent2}{sent3}{sent4}"
 
 
 def generate_narrative(
@@ -10,7 +62,11 @@ def generate_narrative(
     name: str,
     signals: list[SignalResult],
     phase: PhaseResult,
+    verdict: "BottomingVerdict | None" = None,
 ) -> str:
+    # 提供筑底判读时，综述以筑底三迹象口径叙述。
+    if verdict is not None:
+        return _bottoming_narrative(ticker, name, signals, verdict)
     left = [s for s in signals if s.category == "left"]
     right = [s for s in signals if s.category == "right"]
     left_green = [s for s in left if s.light == "green"]

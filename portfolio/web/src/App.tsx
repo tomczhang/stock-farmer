@@ -9,6 +9,7 @@ import {
   useNavigate,
 } from "react-router-dom";
 import { api } from "./api";
+import { isPrivacyOn, setPrivacy } from "./components/Chart";
 import type { Me } from "./types";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -17,6 +18,7 @@ import PlansPage from "./pages/PlansPage";
 import CashFlowsPage from "./pages/CashFlowsPage";
 
 const DataPage = lazy(() => import("./pages/DataPage"));
+const NotesPage = lazy(() => import("./pages/NotesPage"));
 
 interface AuthState {
   me: Me | null;
@@ -63,6 +65,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 function Layout() {
   const { me, loading, logout } = useAuth();
   const navigate = useNavigate();
+  const [privacy, setPrivacyState] = useState(isPrivacyOn());
+
+  const togglePrivacy = () => {
+    const next = !privacy;
+    setPrivacy(next);
+    setPrivacyState(next);
+  };
 
   if (loading) {
     return (
@@ -88,9 +97,18 @@ function Layout() {
             <NavLink to="/holdings">持仓分析</NavLink>
             <NavLink to="/cashflows">现金流</NavLink>
             <NavLink to="/plans">加仓计划</NavLink>
+            <NavLink to="/notes">笔记本</NavLink>
             <NavLink to="/data">数据管理</NavLink>
           </nav>
           <div className="user">
+            <button
+              className={`btn ghost sm privacy-btn ${privacy ? "privacy-on" : ""}`}
+              title={privacy ? "关闭防窥模式，显示金额" : "开启防窥模式，隐藏金额"}
+              aria-pressed={privacy}
+              onClick={togglePrivacy}
+            >
+              {privacy ? "🙈 防窥中" : "👁 防窥"}
+            </button>
             <span>{me.email}</span>
             <button
               className="btn ghost sm"
@@ -104,7 +122,8 @@ function Layout() {
           </div>
         </div>
       </header>
-      <main className="page">
+      {/* privacy 变化时重新挂载页面，确保 useMemo 的图表配置也按新口径重算 */}
+      <main className="page" key={privacy ? "privacy" : "plain"}>
         <Outlet />
       </main>
     </>
@@ -122,6 +141,14 @@ const router = createBrowserRouter([
       { path: "cashflows", element: <CashFlowsPage /> },
       { path: "statements", element: <Navigate to="/data" replace /> },
       { path: "plans", element: <PlansPage /> },
+      {
+        path: "notes",
+        element: (
+          <Suspense fallback={<div className="empty"><span className="spin dark" aria-label="正在加载笔记本" /></div>}>
+            <NotesPage />
+          </Suspense>
+        ),
+      },
       {
         path: "data",
         element: (
