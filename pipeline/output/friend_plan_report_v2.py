@@ -5,6 +5,10 @@
 2) 指标换成新手友好：10 年/20 年资金总额、最大回撤、回本时间（回到 100 万本金）
 3) 显性展示 VOO:QQQM = 5:5；新增建仓进度（仓位%）折线对比
 4) 浅色主题
+
+2026-08 修订（波动率驱动最优 α 原则）：本计划的 VOO 侧改为 T0 一次性打满
+（低波动资产 α=100%），30%+12期+阶梯只作用于 QQQM 侧；阶梯从"双锚"退化为
+单锚（只看纳指回撤）。对比回测见 friend_plan_alpha_check.py。
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ from friend_plan_backtest import align, fetch_daily, month_starts, running_ath  
 
 TOTAL = 1_000_000.0
 TIERS = [(-0.10, 0.25), (-0.17, 0.40), (-0.25, 1.00)]
-NAMES = {"lump": "一次性买入", "dca12": "12个月定投", "plan": "本计划(30%+定投+阶梯)"}
+NAMES = {"lump": "一次性买入", "dca12": "12个月定投", "plan": "本计划(VOO一次性+纳指30%+定投+阶梯)"}
 KINDS = ["lump", "dca12", "plan"]
 
 
@@ -68,11 +72,13 @@ def sim_side(px, ath, ms_all, i0, horizon, side_total, t0_frac, n_inst, use_ladd
 
 def run(kind, i0, horizon, ctx):
     half = TOTAL / 2
-    cfg = {"lump": dict(t0_frac=1.0, n_inst=0, use_ladder=False),
-           "dca12": dict(t0_frac=0.0, n_inst=12, use_ladder=False),
-           "plan": dict(t0_frac=0.3, n_inst=12, use_ladder=True)}[kind]
-    v1, d1 = sim_side(ctx["spx"], ctx["spx_ath"], ctx["ms"], i0, horizon, half, **cfg)
-    v2, d2 = sim_side(ctx["ndx"], ctx["ndx_ath"], ctx["ms"], i0, horizon, half, **cfg)
+    lump = dict(t0_frac=1.0, n_inst=0, use_ladder=False)
+    dca = dict(t0_frac=0.0, n_inst=12, use_ladder=False)
+    stage = dict(t0_frac=0.3, n_inst=12, use_ladder=True)
+    # plan：VOO 侧一次性打满（α=100%），QQQM 侧 30%+12期+阶梯（α≈60% 的分批腿）
+    spx_cfg, ndx_cfg = {"lump": (lump, lump), "dca12": (dca, dca), "plan": (lump, stage)}[kind]
+    v1, d1 = sim_side(ctx["spx"], ctx["spx_ath"], ctx["ms"], i0, horizon, half, **spx_cfg)
+    v2, d2 = sim_side(ctx["ndx"], ctx["ndx_ath"], ctx["ms"], i0, horizon, half, **ndx_cfg)
     return [a + b for a, b in zip(v1, v2)], [a + b for a, b in zip(d1, d2)]
 
 
