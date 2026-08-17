@@ -196,7 +196,10 @@ export default function ReviewsPage() {
             <textarea id="review-macro" className="input" rows={4} value={form.macroNote} onChange={(e) => setForm({ ...form, macroNote: e.target.value })} placeholder="如：美联储议息、财报季走向……" />
           </div>
         </div>
-        <button className="btn" disabled={saving} onClick={save}>{saving ? <span className="spin" /> : `保存 ${month} 复盘`}</button>
+        <button className="btn priority btn-twin" disabled={saving} onClick={save}>
+          <span className="twin" aria-hidden>保存 {month} 复盘</span>
+          <span className="face">{saving ? <span className="spin" /> : `保存 ${month} 复盘`}</span>
+        </button>
       </section>
     </div>
   );

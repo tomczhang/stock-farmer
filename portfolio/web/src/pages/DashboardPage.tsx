@@ -2,7 +2,8 @@ import type { EChartsOption } from "echarts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Chart, fmtCompact, fmtMoney, gradientBarVertical, LIGHT_TOOLTIP, PALETTE } from "../components/Chart";
+import { Chart, fmtCompact, fmtMoney, GAIN, HAIRLINE, LIGHT_TOOLTIP, LOSS, PALETTE } from "../components/Chart";
+import { ValueFlash } from "../components/ValueFlash";
 import { describeCoverageItems } from "../lib/portfolio/coverage";
 import { aggregateSummaryPositions } from "../lib/portfolio/positions";
 import { BUCKET_LABELS, type BucketBudget, type Currency, type RiskSettings, type Summary } from "../types";
@@ -145,7 +146,7 @@ export default function DashboardPage() {
       legend: { top: 0, textStyle: { color: "#64748b", fontSize: 11 } },
       grid: { left: 10, right: 10, top: 34, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: summary.history.map((point) => point.month), axisLabel: { color: "#64748b", fontSize: 10 }, axisLine: { lineStyle: { color: "#e2e8f0" } }, axisTick: { show: false } },
-      yAxis: { type: "value", axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (value: number) => fmtCompact(value) }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
+      yAxis: { type: "value", axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (value: number) => fmtCompact(value) }, splitLine: { lineStyle: { color: HAIRLINE } } },
       series: [
         {
           name: "盈亏",
@@ -154,8 +155,8 @@ export default function DashboardPage() {
           data: summary.history.map((point) => point.gainLossDisplay == null ? null : ({
             value: point.gainLossDisplay,
             itemStyle: {
-              color: gradientBarVertical(point.gainLossDisplay >= 0 ? "#22c55e" : "#ef4444"),
-              borderRadius: point.gainLossDisplay >= 0 ? [6, 6, 0, 0] : [0, 0, 6, 6],
+              color: point.gainLossDisplay >= 0 ? GAIN : LOSS,
+              borderRadius: point.gainLossDisplay >= 0 ? [4, 4, 0, 0] : [0, 0, 4, 4],
             },
           })),
         },
@@ -181,7 +182,10 @@ export default function DashboardPage() {
           </div>
           <label className="sr-only" htmlFor="dashboard-currency">展示币种</label>
           <select id="dashboard-currency" className="select currency-select" value={display} onChange={(event) => setDisplay(event.target.value as Currency)}><option value="USD">USD 计价</option><option value="HKD">HKD 计价</option><option value="CNY">CNY 计价</option></select>
-          <button className="btn ghost" disabled={refreshing || !hasData} onClick={() => load(true)}>{refreshing ? <span className="spin dark" /> : "刷新市值"}</button>
+          <button className="btn ghost btn-twin" disabled={refreshing || !hasData} onClick={() => load(true)}>
+            <span className="twin" aria-hidden>刷新市值</span>
+            <span className="face">{refreshing ? <span className="spin dark" /> : "刷新市值"}</span>
+          </button>
         </div>
       </div>
 
@@ -205,8 +209,8 @@ export default function DashboardPage() {
       ) : summary && (
         <>
           <section className="summary-primary-grid" aria-label="资产与成本核心指标">
-            <div className="kpi"><div className="k">总净资产</div><div className="v">{sign}{fmtMoney(summary.kpi.totalAssets, 0)}<span className="unit">{display}</span></div></div>
-            <div className="kpi ok"><div className="k">持仓市值</div><div className="v">{sign}{fmtMoney(summary.kpi.positionsValue, 0)}</div><div className="sub">{instrumentPositions.length} 个标的</div></div>
+            <div className="kpi"><div className="k">总净资产</div><div className="v"><ValueFlash value={summary.kpi.totalAssets}>{sign}{fmtMoney(summary.kpi.totalAssets, 0)}</ValueFlash><span className="unit">{display}</span></div></div>
+            <div className="kpi ok"><div className="k">持仓市值</div><div className="v"><ValueFlash value={summary.kpi.positionsValue}>{sign}{fmtMoney(summary.kpi.positionsValue, 0)}</ValueFlash></div><div className="sub">{instrumentPositions.length} 个标的</div></div>
             <div className="kpi violet"><div className="k">账面成本</div><div className="v">{costs.bookCost == null ? "—" : `${sign}${fmtMoney(costs.bookCost, 0)}`}</div><div className="sub">当前剩余股份</div></div>
             <div className="kpi blue"><div className="k">外部净投入</div><div className="v">{costs.externalNetInvested == null ? "待初始化" : `${sign}${fmtMoney(costs.externalNetInvested, 0)}`}</div><div className="sub">仅外部资本事件</div></div>
             <div className="kpi accent"><div className="k">现金 / 安全线</div><div className="v">{sign}{fmtMoney(summary.kpi.idleCash, 0)}</div><div className={`sub ${cashRatio >= risk.cashFloor ? "pos" : "neg"}`}>{ratioText(cashRatio)} / 至少 {ratioText(risk.cashFloor)}</div></div>

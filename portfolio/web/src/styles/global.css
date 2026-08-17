@@ -17,10 +17,18 @@
   --ok-bg: rgba(34, 197, 94, 0.1);
   --danger: #ef4444;
   --danger-bg: rgba(239, 68, 68, 0.08);
+  /* 涨跌语义色（全站唯一，LEDGER v2.1 候选 B）；--danger 仅留给删除/错误等操作语义 */
+  --gain: #0E9F6E;
+  --gain-bg: rgba(14, 159, 110, 0.1);
+  --loss: #D84C55;
+  --loss-bg: rgba(216, 76, 85, 0.08);
   --blue: #3b82f6;
   --violet: #8b5cf6;
   --shadow: 0 8px 28px rgba(15, 23, 42, 0.06);
   --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.05);
+  /* 动效双曲线（interior.dev）：入场减速落位 / 出场加速离开 */
+  --ease-enter: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-leave: cubic-bezier(0.4, 0, 1, 1);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -90,20 +98,18 @@ button { font-family: inherit; }
 }
 
 /* ---------- KPI ---------- */
+/* 纯净层级卡：零彩色装饰，层级靠字号，语义色只出现在数值上（旧彩色顶边变体类保留兼容但不再着色） */
 .kpi {
   background: var(--card); border: 1px solid var(--border); border-radius: 10px;
   padding: 16px 18px; box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
-  border-left: 3px solid var(--brand);
 }
-.kpi.ok { border-left-color: var(--ok); }
-.kpi.accent { border-left-color: var(--accent); }
-.kpi.blue { border-left-color: var(--blue); }
-.kpi.violet { border-left-color: var(--violet); }
 .kpi .k { font-size: 12px; color: var(--ink-3); font-weight: 600; }
 .kpi .v {
   font-size: 24px; font-weight: 800; letter-spacing: -0.5px;
   display: flex; align-items: baseline; gap: 4px; margin-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
+.kpi .v.neg { color: var(--loss); }
 .kpi .v .unit { font-size: 12px; font-weight: 600; color: var(--ink-4); }
 .kpi .sub { font-size: 11px; color: var(--ink-4); margin-top: 2px; }
 
@@ -118,10 +124,16 @@ button { font-family: inherit; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.ghost { background: transparent; border-color: var(--border); color: var(--ink-2); }
 .btn.ghost:hover { background: var(--bg-muted); }
+.btn.priority { background: var(--ink); color: #fff; }
+.btn.priority:hover { background: var(--ink-2); }
 .btn.danger { background: transparent; border-color: transparent; color: var(--danger); }
 .btn.danger:hover { background: var(--danger-bg); }
 .btn.sm { padding: 5px 12px; font-size: 12px; }
-.btn:not(.ghost):not(.danger) .spin { border-color: rgba(15, 23, 42, 0.25); border-top-color: var(--ink); }
+.btn:not(.ghost):not(.danger):not(.priority) .spin { border-color: rgba(15, 23, 42, 0.25); border-top-color: var(--ink); }
+/* 隐形双胞胎：加载态与常态同宽，按钮宽度永不跳变（interior.dev 占位法） */
+.btn.btn-twin { display: inline-grid; }
+.btn.btn-twin > .twin { visibility: hidden; grid-area: 1 / 1; display: flex; align-items: center; gap: 6px; }
+.btn.btn-twin > .face { grid-area: 1 / 1; display: flex; align-items: center; justify-content: center; gap: 6px; }
 
 /* ---------- 表单 ---------- */
 .field { margin-bottom: 14px; }
@@ -141,7 +153,7 @@ button { font-family: inherit; }
   text-align: left; font-size: 11px; font-weight: 700; color: var(--ink-4);
   padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
 }
-.table td { padding: 9px 10px; border-bottom: 1px solid var(--bg-muted); }
+.table td { padding: 9px 10px; border-bottom: 1px solid var(--bg-muted); font-variant-numeric: tabular-nums; }
 .table tr:last-child td { border-bottom: none; }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .table th.num { text-align: right; }
@@ -149,16 +161,22 @@ button { font-family: inherit; }
 /* ---------- 杂项 ---------- */
 .chip {
   display: inline-flex; align-items: center; font-size: 11px; font-weight: 600;
-  padding: 2px 10px; border-radius: 20px;
+  padding: 2px 10px; border-radius: 5px;
   border: 1px solid var(--brand-border); background: var(--brand-bg); color: #a16207;
 }
 .chip.ok { border-color: rgba(34, 197, 94, 0.3); background: var(--ok-bg); color: var(--ok); }
 .chip.gray { border-color: var(--border); background: var(--bg-muted); color: var(--ink-3); }
 .chip.warn { border-color: rgba(249, 115, 22, 0.3); background: var(--accent-bg); color: var(--accent); }
 
-.pos { color: var(--ok); }
-.neg { color: var(--danger); }
+.pos { color: var(--gain); }
+.neg { color: var(--loss); }
 .warn-text { color: var(--warn, #d97706); }
+
+/* value-flash：数值变化按方向闪色（事件驱动，组件 900ms 后清除）；箭头格固定占位防布局位移 */
+.vf { transition: color 0.3s var(--ease-enter); }
+.vf.vf-up { color: var(--gain); }
+.vf.vf-down { color: var(--loss); }
+.vf .vf-mark { display: inline-flex; width: 12px; height: 12px; margin-left: 4px; align-self: center; }
 
 .cost-edit {
   background: none; border: none; padding: 0; cursor: pointer;
@@ -237,8 +255,12 @@ button { font-family: inherit; }
 .spin.dark { border-color: var(--border); border-top-color: var(--brand); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.fade-in { animation: fadeIn 0.35s ease both; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* 入场：0.22s 位移+缩放+模糊（出场如需实现必须短于入场） */
+.fade-in { animation: fadeIn 0.22s var(--ease-enter) both; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); filter: blur(6px); }
+  to { opacity: 1; transform: none; filter: blur(0); }
+}
 
 /* ---------- 资本控制中心 ---------- */
 .sr-only {
@@ -269,7 +291,26 @@ button { font-family: inherit; }
 .scope-toggle button.active {
   background: #fff; color: var(--ink); font-weight: 700; box-shadow: var(--shadow-sm);
 }
+/* 支持 :has() 时升级为滑块滑动（两档分段专用）；不支持则回退到上方背景瞬切 */
+@supports selector(:has(*)) {
+  .scope-toggle { position: relative; }
+  .scope-toggle:has(> button:first-of-type:nth-last-of-type(2)) button { flex: 1 1 0; justify-content: center; min-width: 82px; position: relative; z-index: 1; }
+  .scope-toggle:has(> button:first-of-type:nth-last-of-type(2))::before {
+    content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px;
+    width: calc(50% - 4px); background: #fff; border-radius: 6px; box-shadow: var(--shadow-sm);
+    transition: transform 0.28s var(--ease-enter);
+  }
+  .scope-toggle:has(> button:first-of-type:nth-last-of-type(2) ~ button.active)::before { transform: translateX(calc(100% + 2px)); }
+  .scope-toggle:has(> button:first-of-type:nth-last-of-type(2)) button.active { background: transparent; box-shadow: none; }
+}
 .section-card { margin-top: 16px; }
+
+/* 减少动态：信息照常到达，只跳过旅程（闪色保留，位移/模糊/滑动归零） */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in { animation: none; }
+  .scope-toggle::before { transition: none !important; }
+  .vf { transition: none; }
+}
 
 /* 个人笔记本 */
 .note-editor { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.65; resize: vertical; }

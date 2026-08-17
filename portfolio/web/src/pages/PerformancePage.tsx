@@ -2,13 +2,13 @@ import type { EChartsOption } from "echarts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Chart, fmtCompact, fmtMoney, gradientBarVertical, LIGHT_TOOLTIP } from "../components/Chart";
+import { Chart, fmtCompact, fmtMoney, GAIN, HAIRLINE, LIGHT_TOOLTIP, LOSS, MUTED_BAR_OPACITY } from "../components/Chart";
 import type { Currency, ClosedStats, PerformanceResponse } from "../types";
 
 const CCY_SIGN: Record<Currency, string> = { USD: "$", HKD: "HK$", CNY: "¥" };
-/** 月度盈亏配色：盈利青绿 / 亏损暗红（导图口径）。 */
-const GAIN_COLOR = "#14b8a6";
-const LOSS_COLOR = "#b91c1c";
+/** 墨色主线：数据本身是主角（Lieflat 语法）；最新值用品牌黄端点标注。 */
+const INK = "#0f172a";
+const BRAND = "#eab308";
 
 function pctText(value: number | null | undefined, digits = 2) {
   return value == null ? "—" : `${value >= 0 ? "+" : ""}${(value * 100).toFixed(digits)}%`;
@@ -87,7 +87,7 @@ export default function PerformancePage() {
           name: "单位净值",
           scale: true,
           axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (v: number) => v.toFixed(2) },
-          splitLine: { lineStyle: { color: "#f1f5f9" } },
+          splitLine: { lineStyle: { color: HAIRLINE } },
         },
         {
           type: "value",
@@ -103,32 +103,53 @@ export default function PerformancePage() {
           type: "line",
           yAxisIndex: 0,
           data: months.map((m) => m.nav),
-          lineStyle: { color: "#0ea5e9", width: 2 },
-          itemStyle: { color: "#0ea5e9" },
+          lineStyle: { color: INK, width: 2 },
+          itemStyle: { color: INK },
           // 缺月结转的点用空心样式提示口径
           symbol: (_: unknown, params: any) => (months[params.dataIndex]?.carried ? "emptyCircle" : "circle"),
           symbolSize: (_: unknown, params: any) => (months[params.dataIndex]?.carried ? 7 : 4),
           connectNulls: true,
+          // 最新有效净值：品牌黄端点 + 大数标注（视线落点）
+          markPoint: (() => {
+            let lastIdx = -1;
+            for (let i = months.length - 1; i >= 0; i--) {
+              if (months[i].nav != null) { lastIdx = i; break; }
+            }
+            const lastNav = lastIdx >= 0 ? months[lastIdx].nav : null;
+            if (lastNav == null) return undefined;
+            return {
+              symbol: "circle",
+              symbolSize: 9,
+              itemStyle: { color: BRAND, borderColor: INK, borderWidth: 1.5 },
+              label: { show: true, formatter: lastNav.toFixed(4), position: "top" as const, fontWeight: 800 as const, fontSize: 11, color: INK },
+              data: [{ name: "最新净值", coord: [lastIdx, lastNav] as [number, number] }],
+            };
+          })(),
         },
         {
           name: "距高点回撤",
           type: "line",
           yAxisIndex: 1,
           data: months.map((m) => m.drawdown),
-          lineStyle: { color: "#f43f5e", width: 1 },
-          itemStyle: { color: "#f43f5e" },
+          lineStyle: { color: LOSS, width: 1 },
+          itemStyle: { color: LOSS },
           symbol: "none",
-          areaStyle: { color: "rgba(244, 63, 94, 0.12)" },
+          areaStyle: { color: "rgba(216, 76, 85, 0.08)" },
           connectNulls: true,
         },
       ],
     };
   }, [months, sign]);
 
-  /** 月度盈亏柱状图：盈利青绿/亏损暗红 + 全期平均虚线；右轴叠月度累计收益率折线。 */
+  /** 月度盈亏柱状图（Lieflat 语法）：纯色柱，|盈亏| 最大月全饱和 + 标数，其余降饱和；右轴叠累计收益率折线。 */
   const pnlOption = useMemo<EChartsOption>(() => {
     if (!months.length) return {};
     const avg = kpi?.avgMonthlyPnlDisplay ?? null;
+    // 焦点柱：|盈亏| 最大的月份（一图一个视线落点）
+    const focusIdx = months.reduce(
+      (acc, m, i) => (m.pnlDisplay != null && (acc < 0 || Math.abs(m.pnlDisplay) > Math.abs(months[acc].pnlDisplay ?? 0)) ? i : acc),
+      -1,
+    );
     return {
       tooltip: {
         ...LIGHT_TOOLTIP,
@@ -160,7 +181,7 @@ export default function PerformancePage() {
           type: "value",
           name: "月度盈亏",
           axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (v: number) => fmtCompact(v) },
-          splitLine: { lineStyle: { color: "#f1f5f9" } },
+          splitLine: { lineStyle: { color: HAIRLINE } },
         },
         {
           type: "value",
@@ -175,15 +196,27 @@ export default function PerformancePage() {
           type: "bar",
           barWidth: 20,
           yAxisIndex: 0,
-          data: months.map((m) =>
+          data: months.map((m, i) =>
             m.pnlDisplay == null
               ? null
               : {
                   value: m.pnlDisplay,
                   itemStyle: {
-                    color: gradientBarVertical(m.pnlDisplay >= 0 ? GAIN_COLOR : LOSS_COLOR),
-                    borderRadius: m.pnlDisplay >= 0 ? [6, 6, 0, 0] : [0, 0, 6, 6],
+                    color: m.pnlDisplay >= 0 ? GAIN : LOSS,
+                    opacity: i === focusIdx ? 1 : MUTED_BAR_OPACITY,
+                    borderRadius: m.pnlDisplay >= 0 ? [4, 4, 0, 0] : [0, 0, 4, 4],
                   },
+                  label:
+                    i === focusIdx
+                      ? {
+                          show: true,
+                          position: m.pnlDisplay >= 0 ? ("top" as const) : ("bottom" as const),
+                          formatter: `${m.pnlDisplay >= 0 ? "+" : "-"}${fmtCompact(Math.abs(m.pnlDisplay))}`,
+                          fontWeight: 700,
+                          fontSize: 10.5,
+                          color: m.pnlDisplay >= 0 ? GAIN : LOSS,
+                        }
+                      : undefined,
                 },
           ),
           ...(avg != null
@@ -224,13 +257,13 @@ export default function PerformancePage() {
       tooltip: { ...LIGHT_TOOLTIP, formatter: (p: any) => `盈亏区间 ${p.name}<br/>笔数：${p.value}` },
       grid: { left: 10, right: 10, top: 16, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: labels, axisLabel: { color: "#64748b", fontSize: 9, interval: 0, rotate: 30 }, axisLine: { lineStyle: { color: "#e2e8f0" } }, axisTick: { show: false } },
-      yAxis: { type: "value", minInterval: 1, axisLabel: { color: "#94a3b8", fontSize: 10 }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
+      yAxis: { type: "value", minInterval: 1, axisLabel: { color: "#94a3b8", fontSize: 10 }, splitLine: { lineStyle: { color: HAIRLINE } } },
       series: [{
         type: "bar",
         barWidth: 16,
         data: stats.histogram.buckets.map((b, i) => ({
           value: b.count,
-          itemStyle: { color: gradientBarVertical(i < stats.histogram.buckets.length / 2 - 0.5 ? LOSS_COLOR : GAIN_COLOR), borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: i < stats.histogram.buckets.length / 2 - 0.5 ? LOSS : GAIN, borderRadius: [4, 4, 0, 0] },
         })),
       }],
     };
@@ -314,7 +347,7 @@ export default function PerformancePage() {
           </section>
 
           <section className="card section-card">
-            <div className="card-h">月度盈亏<span className="tag">盈利青绿 · 亏损暗红 · 虚线为全期均值</span></div>
+            <div className="card-h">月度盈亏<span className="tag">焦点柱为最值月 · 虚线为全期均值</span></div>
             <Chart option={pnlOption} height={300} />
           </section>
 

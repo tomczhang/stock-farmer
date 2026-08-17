@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
 import { fmtMoney } from "../components/Chart";
+import { ValueFlash } from "../components/ValueFlash";
 import type { WatchlistItem } from "../types";
 
 interface AddForm {
@@ -116,8 +117,9 @@ export default function WatchlistPage() {
           <h1 className="page-title">观察窗口</h1>
           <p className="page-desc">跟踪意向标的的现价与高位回撤；观察高点只升不降（棘轮），可手填 52 周高等参考值。</p>
         </div>
-        <button className="btn ghost" disabled={refreshing || items.length === 0} onClick={() => refresh()}>
-          {refreshing ? <span className="spin dark" /> : "刷新报价"}
+        <button className="btn ghost btn-twin" disabled={refreshing || items.length === 0} onClick={() => refresh()}>
+          <span className="twin" aria-hidden>刷新报价</span>
+          <span className="face">{refreshing ? <span className="spin dark" /> : "刷新报价"}</span>
         </button>
       </div>
 
@@ -166,7 +168,7 @@ export default function WatchlistPage() {
                 {items.map((item) => (
                   <tr key={item.id}>
                     <td><b>{item.symbol}</b><span className="cell-sub">{item.name} · {item.market}</span></td>
-                    <td className="num">{item.price == null ? "—" : `${fmtMoney(item.price)} ${item.currency ?? ""}`}</td>
+                    <td className="num">{item.price == null ? "—" : <ValueFlash value={item.price}>{fmtMoney(item.price)} {item.currency ?? ""}</ValueFlash>}</td>
                     <td className="num">
                       {editing?.id === item.id ? (
                         <input className="input sm" style={{ width: 100 }} type="number" min="0" value={editing.refHigh} onChange={(e) => setEditing({ ...editing, refHigh: e.target.value })} />

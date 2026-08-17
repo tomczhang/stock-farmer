@@ -29,6 +29,14 @@ export function Chart({ option, height = 280 }: { option: echarts.EChartsOption;
 // 浅色系图表 token（源自熊本方案移植）
 export const PALETTE = ["#eab308", "#f97316", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#ef4444"];
 
+/* 涨跌语义色（全站唯一，与 global.css --gain/--loss 同源）；图表内用字面量，ECharts 不读 CSS 变量 */
+export const GAIN = "#0E9F6E";
+export const LOSS = "#D84C55";
+/* Lieflat 语法：非焦点柱降饱和，只给最值柱全饱和 + 标数（一图一个视线落点） */
+export const MUTED_BAR_OPACITY = 0.38;
+/* 发丝线网格色 */
+export const HAIRLINE = "#eef2f6";
+
 export const LIGHT_TOOLTIP = {
   trigger: "item" as const,
   backgroundColor: "rgba(255,255,255,.98)",
