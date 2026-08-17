@@ -294,7 +294,7 @@ export default function CashFlowsPage() {
         <div className="filter-row">
           <div className="field"><label htmlFor="filter-from">开始日期</label><input id="filter-from" className="input sm" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} /></div>
           <div className="field"><label htmlFor="filter-to">结束日期</label><input id="filter-to" className="input sm" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} /></div>
-          <div className="field"><label htmlFor="filter-category">类别</label><select id="filter-category" className="select" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}><option value="">全部</option><option value="capital">外部资本</option><option value="trade">买卖</option><option value="dividend">股息</option><option value="realized_gain">已实现资本利得</option><option value="fee">费用</option></select></div>
+          <div className="field"><label htmlFor="filter-category">类别</label><select id="filter-category" className="select sm" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}><option value="">全部</option><option value="capital">外部资本</option><option value="trade">买卖</option><option value="dividend">股息</option><option value="realized_gain">已实现资本利得</option><option value="fee">费用</option></select></div>
           <div className="field"><label htmlFor="filter-symbol">标的</label><input id="filter-symbol" className="input sm" placeholder="全部" value={filters.symbol} onChange={(e) => setFilters({ ...filters, symbol: e.target.value })} /></div>
         </div>
         {busy ? <div className="empty"><span className="spin dark" /></div> : (

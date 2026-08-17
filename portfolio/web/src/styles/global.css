@@ -146,6 +146,7 @@ button { font-family: inherit; }
 }
 .input:focus, .select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-bg); }
 .input.sm { padding: 5px 8px; font-size: 12px; }
+.select.sm { padding: 5px 8px; font-size: 12px; }
 
 /* ---------- 表格 ---------- */
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
