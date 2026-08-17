@@ -359,8 +359,8 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
       const result = db
         .prepare(
           `INSERT INTO trades
-           (user_id, broker, market, currency, symbol, name, side, trade_date, quantity, price, fee, gross_amount, bucket, fx_to_usd)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (user_id, broker, market, currency, symbol, name, side, trade_date, quantity, price, fee, gross_amount, bucket, fx_to_usd, reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           userId,
@@ -377,6 +377,7 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
           trade.quantity * trade.price,
           ledger?.bucketFor(userId, trade.market, trade.symbol) ?? null,
           fxToUsd[asCurrency(trade.currency)] ?? 1,
+          trade.reason?.trim() || null,
         );
       return Number(result.lastInsertRowid);
     },
@@ -385,7 +386,7 @@ export function createPortfolioService(db: AppDatabase, fxToUsd: Record<string, 
       return db
         .prepare(
           `SELECT id, broker, market, currency, symbol, name, side, trade_date AS tradeDate,
-                  quantity, price, fee, source, created_at AS createdAt
+                  quantity, price, fee, source, reason, created_at AS createdAt
            FROM trades WHERE user_id = ? ORDER BY trade_date DESC, id DESC`,
         )
         .all(userId);

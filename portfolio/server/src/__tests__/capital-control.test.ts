@@ -27,19 +27,24 @@ async function summary(ctx: ReturnType<typeof createTestApp>, cookie: string) {
 }
 
 describe("资本、现金流与盈亏口径", () => {
-  it("迁移框架在全新数据库上幂等建立 v1-v4", () => {
+  it("迁移框架在全新数据库上幂等建立 v1-v5", () => {
     const ctx = createTestApp();
     const versions = ctx.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>;
-    expect(versions.map((row) => row.version)).toEqual([1, 2, 3, 4]);
+    expect(versions.map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
     expect(ctx.db.prepare("PRAGMA table_info(capital_events)").all()).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "bucket" })]),
     );
     expect(ctx.db.prepare("PRAGMA table_info(pyramid_plans)").all()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "estimated_fee", dflt_value: "0" })]),
+      expect.arrayContaining([expect.objectContaining({ name: "estimated_fee", dflt_value: "0" }), expect.objectContaining({ name: "direction" })]),
     );
     expect(ctx.db.prepare("PRAGMA table_info(notes)").all()).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "pinned" })]),
     );
+    expect(ctx.db.prepare("PRAGMA table_info(trades)").all()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "reason" })]),
+    );
+    expect(ctx.db.prepare("PRAGMA table_info(monthly_reviews)").all().length).toBeGreaterThan(0);
+    expect(ctx.db.prepare("PRAGMA table_info(watchlist)").all().length).toBeGreaterThan(0);
   });
 
   it("只有资本事件改变净投入，反复买卖与收益费用不改变", async () => {

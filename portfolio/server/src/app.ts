@@ -6,10 +6,12 @@ import type { AppDatabase } from "./db.js";
 import { ConflictError, ValidationError } from "./errors.js";
 import { createLedgerService } from "./ledger.js";
 import type { Mailer } from "./mailer.js";
+import { createPerformanceService, parseScope } from "./performance.js";
 import { createPlanService } from "./plans.js";
 import { createPortfolioService } from "./portfolio.js";
 import { createQuoteService, type QuoteFetcher } from "./quotes.js";
 import { createRiskService } from "./risk.js";
+import { createWatchlistService } from "./watchlist.js";
 import type {
   Bucket,
   BucketBudgetInput,
@@ -17,11 +19,13 @@ import type {
   CashBalanceInput,
   CashFlowEventInput,
   Currency,
+  MonthlyReviewInput,
   PlanInput,
   RiskSettingsInput,
   SafeAddInput,
   StatementPayload,
   TradeInput,
+  WatchlistInput,
 } from "./types.js";
 
 const SESSION_COOKIE = "sf_session";
@@ -45,6 +49,8 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
   );
   const plans = createPlanService(db, config.fxToUsd, risk);
   const quotes = createQuoteService(db, quoteFetcher);
+  const perf = createPerformanceService(db, config.fxToUsd, ledger);
+  const watchlist = createWatchlistService(db, quotes);
 
   const app = new Hono<Env>();
 
@@ -213,6 +219,55 @@ export function createApp({ db, config, mailer, quoteFetcher, secureCookie = tru
     const ok = portfolio.deleteTrade(c.get("userId"), Number(c.req.param("id")));
     return ok ? c.json({ ok: true }) : c.json({ error: "交易不存在" }, 404);
   });
+
+  // ---------- 绩效（单位净值/回撤/月度盈亏） ----------
+  app.get("/api/portfolio/performance", (c) => {
+    const display = (["USD", "HKD", "CNY"].find((item) => item === c.req.query("display")) ?? "USD") as Currency;
+    const scope = parseScope(c.req.query("scope"));
+    return c.json(perf.performance(c.get("userId"), scope, display));
+  });
+
+  // ---------- 已平仓交易统计 ----------
+  app.get("/api/trades/closed-stats", (c) => {
+    const display = (["USD", "HKD", "CNY"].find((item) => item === c.req.query("display")) ?? "USD") as Currency;
+    return c.json(perf.closedStats(c.get("userId"), display));
+  });
+
+  // ---------- 月度复盘 ----------
+  app.get("/api/reviews", (c) => c.json(perf.listReviews(c.get("userId"))));
+
+  app.get("/api/reviews/:month", (c) => {
+    const display = (["USD", "HKD", "CNY"].find((item) => item === c.req.query("display")) ?? "USD") as Currency;
+    const scope = parseScope(c.req.query("scope"));
+    return c.json(perf.review(c.get("userId"), c.req.param("month"), scope, display));
+  });
+
+  app.put("/api/reviews/:month", async (c) => {
+    const input = (await c.req.json()) as MonthlyReviewInput;
+    perf.saveReview(c.get("userId"), c.req.param("month"), input);
+    return c.json({ ok: true });
+  });
+
+  // ---------- 观察窗口 ----------
+  app.get("/api/watchlist", (c) => c.json(watchlist.list(c.get("userId"))));
+
+  app.post("/api/watchlist", async (c) => {
+    const input = (await c.req.json()) as WatchlistInput;
+    return c.json(await watchlist.add(c.get("userId"), input), 201);
+  });
+
+  app.patch("/api/watchlist/:id", async (c) => {
+    const input = (await c.req.json()) as Partial<WatchlistInput>;
+    const updated = watchlist.update(c.get("userId"), Number(c.req.param("id")), input);
+    return updated ? c.json(updated) : c.json({ error: "观察标的不存在" }, 404);
+  });
+
+  app.delete("/api/watchlist/:id", (c) => {
+    const ok = watchlist.remove(c.get("userId"), Number(c.req.param("id")));
+    return ok ? c.json({ ok: true }) : c.json({ error: "观察标的不存在" }, 404);
+  });
+
+  app.post("/api/watchlist/refresh", async (c) => c.json(await watchlist.refresh(c.get("userId"))));
 
   // ---------- 仓别标注 ----------
   app.put("/api/buckets", async (c) => {

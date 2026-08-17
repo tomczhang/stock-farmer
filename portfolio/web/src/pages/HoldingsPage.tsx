@@ -39,12 +39,19 @@ export default function HoldingsPage() {
   const [editingCost, setEditingCost] = useState<{ key: string; value: string } | null>(null);
   // 分层视图：默认只看自主组合，授予仓（RSU）单独隔离
   const [scope, setScope] = useState<"self" | "all">("self");
+  // 持有时长（自首次买入日）：来自交易流水，无买入记录的持仓显示 —
+  const [holdingAges, setHoldingAges] = useState<Map<string, { firstBuyDate: string; days: number }>>(new Map());
 
   const load = useCallback(async () => {
     setBusy(true);
     setError("");
     try {
-      setSummary(await api.get<Summary>(`/api/portfolio/summary?display=USD${scope === "self" ? "&scope=self" : ""}`));
+      const [nextSummary, stats] = await Promise.all([
+        api.get<Summary>(`/api/portfolio/summary?display=USD${scope === "self" ? "&scope=self" : ""}`),
+        api.get<{ openHoldingAges: Array<{ key: string; firstBuyDate: string; days: number }> }>("/api/trades/closed-stats"),
+      ]);
+      setSummary(nextSummary);
+      setHoldingAges(new Map(stats.openHoldingAges.map((h) => [h.key, { firstBuyDate: h.firstBuyDate, days: h.days }])));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "持仓加载失败");
     } finally {
@@ -159,7 +166,7 @@ export default function HoldingsPage() {
         ) : (
           <div className="table-scroll holdings-table-wrap" tabIndex={0} aria-label="持仓表，可横向滚动">
             <table className="table holdings-table">
-              <thead><tr><th>标的 / 行情</th><th>仓别</th><th className="num">市值 / 占比</th><th className="num">账面成本</th><th className="num">资本利得</th><th className="num">股息</th><th className="num">交易费用</th><th className="num">累计盈亏</th><th>数据</th><th /></tr></thead>
+              <thead><tr><th>标的 / 行情</th><th>仓别</th><th className="num">市值 / 占比</th><th className="num">账面成本</th><th className="num">资本利得</th><th className="num">股息</th><th className="num">交易费用</th><th className="num">累计盈亏</th><th className="num">持有时长</th><th>数据</th><th /></tr></thead>
               <tbody>
                 {positions.map((position) => {
                   const detailId = `detail-${position.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -181,6 +188,13 @@ export default function HoldingsPage() {
                         <td className="num pos">{moneyOrDash(position.pnl.dividendsNet)}</td>
                         <td className="num neg">{position.pnl.tradingFees ? `-$${fmtMoney(Math.abs(position.pnl.tradingFees))}` : "$0.00"}</td>
                         <td className={`num ${(position.pnl.explainedTotal ?? 0) >= 0 ? "pos" : "neg"}`}><b>{moneyOrDash(position.pnl.explainedTotal)}</b></td>
+                        <td className="num">
+                          {(() => {
+                            const age = holdingAges.get(position.key);
+                            if (!age) return "—";
+                            return <><b>{age.days} 天</b><span className="cell-sub">自 {age.firstBuyDate}</span></>;
+                          })()}
+                        </td>
                         <td><span className={`chip ${coverage.className}`}>{coverage.text}</span></td>
                         <td><button className="btn ghost sm" aria-expanded={expanded === position.key} aria-controls={detailId} onClick={() => setExpanded(expanded === position.key ? null : position.key)}>{expanded === position.key ? "收起" : "详情"}</button></td>
                       </tr>
@@ -212,7 +226,7 @@ function InstrumentDetail({
 }) {
   return (
     <tr id={detailId} className="position-detail-row">
-      <td colSpan={10}>
+      <td colSpan={11}>
         <div className="position-detail-grid">
           <div><span>聚合数量</span><b>{fmtMoney(position.quantity, 0)} 股</b></div>
           <div><span>当前平均账面成本</span><b>{position.avgCost == null ? "待补录" : `${fmtMoney(position.avgCost)} ${position.currency}`}</b></div>

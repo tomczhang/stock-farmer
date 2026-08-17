@@ -269,6 +269,41 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
       CREATE INDEX idx_notes_user ON notes(user_id, pinned DESC, updated_at DESC);
     `,
   },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE trades ADD COLUMN reason TEXT;
+      ALTER TABLE pyramid_plans ADD COLUMN direction TEXT NOT NULL DEFAULT 'add';
+
+      CREATE TABLE monthly_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        month TEXT NOT NULL,
+        attribution TEXT NOT NULL DEFAULT '',
+        mistakes TEXT NOT NULL DEFAULT '',
+        improvements TEXT NOT NULL DEFAULT '',
+        macro_note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(user_id, month)
+      );
+      CREATE INDEX idx_monthly_reviews_user ON monthly_reviews(user_id, month DESC);
+
+      CREATE TABLE watchlist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        ref_high REAL,
+        ref_high_date TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(user_id, market, symbol)
+      );
+      CREATE INDEX idx_watchlist_user ON watchlist(user_id, created_at DESC);
+    `,
+  },
 ];
 
 export type AppDatabase = Database.Database;

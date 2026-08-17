@@ -32,7 +32,7 @@ import type {
 import { BUCKET_LABELS } from "../types";
 
 interface TierDraft {
-  triggerType: "pct_drop" | "price";
+  triggerType: "pct_drop" | "price" | "pct_gain";
   triggerValue: string;
   allocType: "pct" | "amount";
   allocValue: string;
@@ -50,6 +50,7 @@ interface PlanDraft {
   estimatedFee: string;
   note: string;
   templateId?: PlanTemplateId;
+  direction: "add" | "trim";
   tiers: TierDraft[];
 }
 
@@ -85,10 +86,11 @@ function toPlanInput(draft: PlanDraft): PlanInput {
     currency: draft.currency,
     scenarioName: draft.scenarioName.trim() || draft.templateId || "自定义方案",
     basePrice: Number(draft.basePrice),
-    totalBudget: Number(draft.totalBudget),
+    totalBudget: draft.direction === "trim" ? Number(draft.totalBudget || 0) : Number(draft.totalBudget),
     estimatedFee: Number(draft.estimatedFee || 0),
     note: draft.note.trim() || undefined,
-    templateWeights: draft.templateId ? [...PLAN_TEMPLATES[draft.templateId]] : undefined,
+    templateWeights: draft.direction === "add" && draft.templateId ? [...PLAN_TEMPLATES[draft.templateId]] : undefined,
+    direction: draft.direction,
     tiers: draft.tiers.map((tier, index): PlanInputTier => ({
       seq: index + 1,
       triggerType: tier.triggerType,
@@ -323,7 +325,7 @@ export default function PlansPage() {
   const selected = plansForDecision.find((plan) => plan.id === selectedId) ?? null;
   const pendingExecutionPlans = plans.filter(hasPendingExecution);
 
-  const openDraft = (plan?: Plan, templateId: PlanTemplateId = "1234") => {
+  const openDraft = (plan?: Plan, templateId: PlanTemplateId = "1234", direction: "add" | "trim" = "add") => {
     if (plan) {
       setDraft({
         id: plan.id,
@@ -336,12 +338,32 @@ export default function PlansPage() {
         totalBudget: String(plan.totalBudget),
         estimatedFee: String(plan.estimatedFee ?? 0),
         note: plan.note ?? "",
+        direction: plan.direction ?? "add",
         tiers: plan.tiers.map((tier) => ({
           triggerType: tier.triggerType,
           triggerValue: String(tier.triggerValue),
           allocType: tier.allocType,
           allocValue: String(tier.allocValue),
         })),
+      });
+      return;
+    }
+    if (direction === "trim") {
+      setDraft({
+        symbol: decisionPosition?.symbol ?? "",
+        name: decisionPosition?.name ?? "",
+        market: decisionPosition?.market ?? "US",
+        currency: decisionPosition?.currency ?? "USD",
+        scenarioName: "",
+        basePrice: decisionPosition?.currentPrice == null ? "" : String(decisionPosition.currentPrice),
+        totalBudget: "0",
+        estimatedFee: String(Math.max(0, Number(estimatedFee) || 0)),
+        note: "",
+        direction: "trim",
+        tiers: [
+          { triggerType: "pct_gain", triggerValue: "20", allocType: "pct", allocValue: "30" },
+          { triggerType: "pct_gain", triggerValue: "40", allocType: "pct", allocValue: "30" },
+        ],
       });
       return;
     }
@@ -356,6 +378,7 @@ export default function PlansPage() {
       estimatedFee: String(Math.max(0, Number(estimatedFee) || 0)),
       note: "",
       templateId,
+      direction: "add",
       tiers: tiersFromTemplate(templateId),
     });
   };
@@ -477,7 +500,7 @@ export default function PlansPage() {
   const draftReady = !!draft
     && !!draft.symbol.trim()
     && Number(draft.basePrice) > 0
-    && Number(draft.totalBudget) > 0
+    && (draft.direction === "trim" || Number(draft.totalBudget) > 0)
     && Number(draft.estimatedFee) >= 0
     && draft.tiers.every((tier) => Number(tier.triggerValue) > 0 && Number(tier.allocValue) > 0);
 
@@ -488,7 +511,10 @@ export default function PlansPage() {
           <h1 className="page-title">加仓计划</h1>
           <p className="page-desc">先看安全金额，再比较同一标的的多个加仓方案；行情仅作次级参考。</p>
         </div>
-        <button className="btn" disabled={!decisionPosition} onClick={() => openDraft()}>新建方案</button>
+        <div className="heading-actions">
+          <button className="btn" disabled={!decisionPosition} onClick={() => openDraft()}>新建加仓方案</button>
+          <button className="btn ghost" disabled={!decisionPosition} onClick={() => openDraft(undefined, "1234", "trim")}>新建减仓方案</button>
+        </div>
       </div>
       {error && <div className="alert error" role="alert">{error}</div>}
       {notice && <div className="alert ok" role="status">{notice}</div>}
@@ -600,10 +626,12 @@ export default function PlansPage() {
             {plansForDecision.map((plan) => (
               <article key={plan.id} className={`scenario-card ${selectedId === plan.id ? "active" : ""}`}>
                 <button className="scenario-main" onClick={() => setSelectedId(plan.id)}>
-                  <b>{plan.scenarioName ?? plan.name}</b>
-                  <span>{plan.symbol} · 预算 {fmtMoney(plan.totalBudget, 0)} {plan.currency}</span>
+                  <b>{plan.scenarioName ?? plan.name}<span className={`chip ${plan.direction === "trim" ? "warn" : "ok"}`} style={{ marginLeft: 6 }}>{plan.direction === "trim" ? "减仓" : "加仓"}</span></b>
+                  <span>{plan.direction === "trim"
+                    ? `${plan.symbol} · 计划卖出 ${fmtMoney(plan.totalSellQuantity ?? 0, 0)} 股 · 回收 ~${fmtMoney(plan.totalNetProceeds ?? 0, 0)} ${plan.currency}`
+                    : `${plan.symbol} · 预算 ${fmtMoney(plan.totalBudget, 0)} ${plan.currency}`}</span>
                 </button>
-                <label className="check-field"><input type="checkbox" checked={compareIds.includes(plan.id)} onChange={() => toggleCompare(plan)} />加入比较</label>
+                {plan.direction !== "trim" && <label className="check-field"><input type="checkbox" checked={compareIds.includes(plan.id)} onChange={() => toggleCompare(plan)} />加入比较</label>}
                 <div className="scenario-actions"><button className="btn ghost sm" onClick={() => openDraft(plan)}>编辑</button><button className="btn danger sm" onClick={() => removePlan(plan.id)}>删除</button></div>
               </article>
             ))}
@@ -624,7 +652,28 @@ export default function PlansPage() {
         </section>
       )}
 
-      {selected && !draft && (
+      {selected && !draft && (selected.direction === "trim" ? (
+        <section className="card section-card" aria-labelledby="selected-plan-title">
+          <div className="card-h" id="selected-plan-title">{selected.symbol} · {selected.scenarioName ?? selected.name}<span className="chip warn">减仓方案</span></div>
+          <div className="pnl-breakdown">
+            <div><span>当前持仓</span><b>{fmtMoney(selected.currentPosition?.quantity ?? 0, 0)} 股</b></div>
+            <div><span>计划卖出</span><b>{fmtMoney(selected.totalSellQuantity ?? 0, 0)} 股</b></div>
+            <div><span>预计回收（含费前/后）</span><b>{fmtMoney(selected.totalProceeds ?? 0, 0)} / {fmtMoney(selected.totalNetProceeds ?? 0, 0)} {selected.currency}</b></div>
+            <div><span>卖完后剩余</span><b>{selected.final?.quantity == null ? "—" : `${fmtMoney(selected.final.quantity, 0)} 股`}</b></div>
+          </div>
+          <div className="table-scroll" tabIndex={0} aria-label="减仓档位，可横向滚动">
+            <table className="table plan-tier-table">
+              <thead><tr><th>档位</th><th>触发</th><th className="num">卖出价</th><th className="num">卖出数量</th><th className="num">回收现金</th><th className="num">卖后剩余</th><th className="num">卖后账面成本</th><th className="num">标的占比</th><th className="num">现金率</th><th>成交</th></tr></thead>
+              <tbody>{selected.tiers.map((tier) => {
+                const executionSlotAvailable = canPlanStartExecution(selected.id, plans);
+                return <tr key={tier.id} className={tier.filledAt ? "filled-row" : ""}><td>第 {tier.seq} 档</td><td>{tier.triggerType === "pct_gain" ? `涨 ${tier.triggerValue}%` : `价格 ${fmtMoney(tier.triggerValue)} ${selected.currency}`}</td><td className="num">{tier.sellPrice == null ? "—" : `${fmtMoney(tier.sellPrice)} ${selected.currency}`}</td><td className="num">{tier.quantity == null ? "—" : fmtMoney(tier.quantity, 0)}</td><td className="num">{tier.proceeds == null ? "—" : `${fmtMoney(tier.proceeds, 0)} ${selected.currency}`}</td><td className="num">{tier.postQuantity == null ? "—" : fmtMoney(tier.postQuantity, 0)}</td><td className="num">{tier.postBookCost == null ? "—" : `${fmtMoney(tier.postBookCost, 0)} ${selected.currency}`}</td><td className="num">{tier.postSymbolRatio == null ? "—" : `${(tier.postSymbolRatio * 100).toFixed(1)}%`}</td><td className="num">{tier.postCashRatio == null ? "—" : `${(tier.postCashRatio * 100).toFixed(1)}%`}</td><td><label className="check-field"><input type="checkbox" checked={!!tier.filledAt} disabled={!tier.filledAt && !executionSlotAvailable} title={!tier.filledAt && !executionSlotAvailable ? "资产账户内已有其他方案存在未同步成交档位" : undefined} onChange={(event) => toggleFill(selected, tier.id, event.target.checked)} />{tier.filledAt ? "已成交" : "标记成交"}</label></td></tr>;
+              })}</tbody>
+            </table>
+          </div>
+          <p className="helper-text">卖出模拟不计税负；账面成本按卖出数量等比结转，每股摊薄成本不变。</p>
+          <details className="market-reference"><summary>行情参考（次级）</summary><TradingViewWidget symbol={selected.symbol} market={selected.market} height={460} /></details>
+        </section>
+      ) : (
         <section className="card section-card" aria-labelledby="selected-plan-title">
           <div className="card-h" id="selected-plan-title">{selected.symbol} · {selected.scenarioName ?? selected.name}<span className={`chip ${selected.final?.safe ? "ok" : "warn"}`}>{selected.final?.safe ? "安全方案" : "草稿/有约束"}</span></div>
           <ScenarioImpact plan={selected} />
@@ -643,15 +692,17 @@ export default function PlansPage() {
           </div>
           <details className="market-reference"><summary>行情参考（次级）</summary><TradingViewWidget symbol={selected.symbol} market={selected.market} height={460} /></details>
         </section>
-      )}
+      ))}
 
       {draft && (
         <section className="card section-card plan-editor" aria-labelledby="plan-editor-title">
-          <div className="card-h" id="plan-editor-title">{draft.id ? `编辑方案 · ${draft.symbol}` : "新建加仓方案"}</div>
-          <div className="template-picker" role="group" aria-label="方案模板">
-            <button className={`btn ${draft.templateId === "1248" ? "" : "ghost"}`} aria-pressed={draft.templateId === "1248"} onClick={() => applyTemplate("1248")}>1:2:4:8 加倍递增</button>
-            <button className={`btn ${draft.templateId === "1234" ? "" : "ghost"}`} aria-pressed={draft.templateId === "1234"} onClick={() => applyTemplate("1234")}>1:2:3:4 线性递增</button>
-          </div>
+          <div className="card-h" id="plan-editor-title">{draft.id ? `编辑方案 · ${draft.symbol}` : draft.direction === "trim" ? "新建减仓方案" : "新建加仓方案"}<span className={`chip ${draft.direction === "trim" ? "warn" : "ok"}`}>{draft.direction === "trim" ? "减仓（卖出）" : "加仓（买入）"}</span></div>
+          {draft.direction === "add" && (
+            <div className="template-picker" role="group" aria-label="方案模板">
+              <button className={`btn ${draft.templateId === "1248" ? "" : "ghost"}`} aria-pressed={draft.templateId === "1248"} onClick={() => applyTemplate("1248")}>1:2:4:8 加倍递增</button>
+              <button className={`btn ${draft.templateId === "1234" ? "" : "ghost"}`} aria-pressed={draft.templateId === "1234"} onClick={() => applyTemplate("1234")}>1:2:3:4 线性递增</button>
+            </div>
+          )}
           <div className="plan-form-grid">
             <div className="field"><label htmlFor="plan-symbol">标的代码</label><input id="plan-symbol" className="input" value={draft.symbol} disabled={draft.id != null} onChange={(event) => setDraft({ ...draft, symbol: event.target.value.toUpperCase() })} />{draft.id != null && <small className="field-help">已有方案不可切换标的，请新建方案。</small>}</div>
             <div className="field"><label htmlFor="plan-name">标的名称</label><input id="plan-name" className="input" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
@@ -659,25 +710,25 @@ export default function PlansPage() {
             <div className="field"><label htmlFor="plan-market">市场</label><select id="plan-market" className="select" value={draft.market} disabled={draft.id != null} onChange={(event) => { const market = event.target.value; setDraft({ ...draft, market, currency: market === "HK" ? "HKD" : "USD" }); }}><option value="US">美股</option><option value="HK">港股</option></select></div>
             <div className="field"><label htmlFor="plan-currency">币种</label><select id="plan-currency" className="select" value={draft.currency} onChange={(event) => setDraft({ ...draft, currency: event.target.value as Currency })}><option>USD</option><option>HKD</option><option>CNY</option></select></div>
             <div className="field"><label htmlFor="plan-base-price">基准价</label><input id="plan-base-price" className="input" type="number" min="0" value={draft.basePrice} onChange={(event) => setDraft({ ...draft, basePrice: event.target.value })} /></div>
-            <div className="field"><label htmlFor="plan-budget">总预算（{draft.currency}）</label><input id="plan-budget" className="input" type="number" min="0" value={draft.totalBudget} onChange={(event) => setDraft({ ...draft, totalBudget: event.target.value })} /></div>
+            {draft.direction === "add" && <div className="field"><label htmlFor="plan-budget">总预算（{draft.currency}）</label><input id="plan-budget" className="input" type="number" min="0" value={draft.totalBudget} onChange={(event) => setDraft({ ...draft, totalBudget: event.target.value })} /></div>}
             <div className="field"><label htmlFor="plan-estimated-fee">总预计交易费（{draft.currency}）</label><input id="plan-estimated-fee" className="input" type="number" min="0" step="0.01" value={draft.estimatedFee} onChange={(event) => setDraft({ ...draft, estimatedFee: event.target.value })} /></div>
             <div className="field field-wide"><label htmlFor="plan-note">备注</label><input id="plan-note" className="input" value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></div>
           </div>
-          <div className="card-h">档位设置<span className="tag">仅正数加仓</span></div>
+          <div className="card-h">档位设置<span className="tag">{draft.direction === "trim" ? "合计卖出不超当前持仓" : "仅正数加仓"}</span></div>
           <div className="tier-editor">
             {draft.tiers.map((tier, index) => (
               <article className="tier-card" key={index}>
                 <div className="tier-card-title"><b>第 {index + 1} 档</b><button className="btn danger sm" disabled={draft.tiers.length <= 1} onClick={() => setDraft({ ...draft, tiers: draft.tiers.filter((_, itemIndex) => itemIndex !== index), templateId: undefined })}>删除</button></div>
                 <div className="tier-card-fields">
-                  <div className="field"><label htmlFor={`tier-trigger-type-${index}`}>触发方式</label><select id={`tier-trigger-type-${index}`} className="select" value={tier.triggerType} onChange={(event) => { const tiers = [...draft.tiers]; tiers[index] = { ...tier, triggerType: event.target.value as TierDraft["triggerType"] }; setDraft({ ...draft, tiers, templateId: undefined }); }}><option value="pct_drop">较基准价跌幅 %</option><option value="price">具体价格</option></select></div>
+                  <div className="field"><label htmlFor={`tier-trigger-type-${index}`}>触发方式</label><select id={`tier-trigger-type-${index}`} className="select" value={tier.triggerType} onChange={(event) => { const tiers = [...draft.tiers]; tiers[index] = { ...tier, triggerType: event.target.value as TierDraft["triggerType"] }; setDraft({ ...draft, tiers, templateId: undefined }); }}>{draft.direction === "trim" ? <><option value="pct_gain">较基准价涨幅 %</option><option value="price">目标价格</option></> : <><option value="pct_drop">较基准价跌幅 %</option><option value="price">具体价格</option></>}</select></div>
                   <div className="field"><label htmlFor={`tier-trigger-value-${index}`}>触发值</label><input id={`tier-trigger-value-${index}`} className="input" type="number" min="0" value={tier.triggerValue} onChange={(event) => { const tiers = [...draft.tiers]; tiers[index] = { ...tier, triggerValue: event.target.value }; setDraft({ ...draft, tiers, templateId: undefined }); }} /></div>
-                  <div className="field"><label htmlFor={`tier-alloc-type-${index}`}>仓位方式</label><select id={`tier-alloc-type-${index}`} className="select" value={tier.allocType} onChange={(event) => { const tiers = [...draft.tiers]; tiers[index] = { ...tier, allocType: event.target.value as TierDraft["allocType"] }; setDraft({ ...draft, tiers, templateId: undefined }); }}><option value="pct">占预算 %</option><option value="amount">固定金额</option></select></div>
+                  <div className="field"><label htmlFor={`tier-alloc-type-${index}`}>仓位方式</label><select id={`tier-alloc-type-${index}`} className="select" value={tier.allocType} onChange={(event) => { const tiers = [...draft.tiers]; tiers[index] = { ...tier, allocType: event.target.value as TierDraft["allocType"] }; setDraft({ ...draft, tiers, templateId: undefined }); }}>{draft.direction === "trim" ? <><option value="pct">卖出持仓 %</option><option value="amount">固定金额</option></> : <><option value="pct">占预算 %</option><option value="amount">固定金额</option></>}</select></div>
                   <div className="field"><label htmlFor={`tier-alloc-value-${index}`}>仓位值</label><input id={`tier-alloc-value-${index}`} className="input" type="number" min="0" value={tier.allocValue} onChange={(event) => { const tiers = [...draft.tiers]; tiers[index] = { ...tier, allocValue: event.target.value }; setDraft({ ...draft, tiers, templateId: undefined }); }} /></div>
                 </div>
               </article>
             ))}
           </div>
-          <button className="btn ghost sm" onClick={() => setDraft({ ...draft, templateId: undefined, tiers: [...draft.tiers, { triggerType: "pct_drop", triggerValue: "", allocType: "pct", allocValue: "" }] })}>添加档位</button>
+          <button className="btn ghost sm" onClick={() => setDraft({ ...draft, templateId: undefined, tiers: [...draft.tiers, { triggerType: draft.direction === "trim" ? "pct_gain" : "pct_drop", triggerValue: "", allocType: "pct", allocValue: "" }] })}>添加档位</button>
           <div className="form-actions"><button className="btn" disabled={saving || !draftReady} onClick={savePlan}>{saving ? <span className="spin" /> : "保存方案"}</button><button className="btn ghost" onClick={() => setDraft(null)}>取消</button></div>
         </section>
       )}

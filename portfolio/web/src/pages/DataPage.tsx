@@ -33,6 +33,7 @@ interface TradeForm {
   quantity: string;
   price: string;
   fee: string;
+  reason: string;
 }
 
 const EMPTY_TRADE: TradeForm = {
@@ -46,6 +47,7 @@ const EMPTY_TRADE: TradeForm = {
   quantity: "",
   price: "",
   fee: "",
+  reason: "",
 };
 
 interface CashForm {
@@ -148,6 +150,7 @@ export default function DataPage() {
         quantity: Number(tradeForm.quantity),
         price: Number(tradeForm.price),
         fee: tradeForm.fee === "" ? 0 : Number(tradeForm.fee),
+        reason: tradeForm.reason.trim() || undefined,
       });
       setNotice(`已录入 ${tradeForm.side === "buy" ? "买入" : "卖出"} ${tradeForm.symbol.toUpperCase()}`);
       setTradeForm({ ...EMPTY_TRADE, broker: tradeForm.broker, market: tradeForm.market, currency: tradeForm.currency });
@@ -499,6 +502,11 @@ export default function DataPage() {
                 <input id="manual-trade-fee" className="input sm" style={{ width: 80 }} type="number" placeholder="0" value={tradeForm.fee}
                   onChange={(e) => setTradeForm({ ...tradeForm, fee: e.target.value })} />
               </div>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label htmlFor="manual-trade-reason">交易原因</label>
+                <input id="manual-trade-reason" className="input sm" style={{ width: 180 }} placeholder="如：阶梯-10%触发加速" value={tradeForm.reason}
+                  onChange={(e) => setTradeForm({ ...tradeForm, reason: e.target.value })} />
+              </div>
               <button className="btn sm" style={{ height: 32 }}
                 disabled={tradeSaving || !tradeForm.symbol || !tradeForm.quantity || !tradeForm.price}
                 onClick={submitTrade}>
@@ -521,6 +529,7 @@ export default function DataPage() {
                       <th className="num">成交价</th>
                       <th className="num">手续费</th>
                       <th className="num">净额</th>
+                      <th>原因</th>
                       <th />
                     </tr>
                   </thead>
@@ -540,6 +549,9 @@ export default function DataPage() {
                         <td className="num">{fmtMoney(t.fee)}</td>
                         <td className={`num ${t.side === "buy" ? "" : "pos"}`}>
                           {t.side === "buy" ? "-" : "+"}{fmtMoney(t.quantity * t.price + (t.side === "buy" ? t.fee : -t.fee))} {t.currency}
+                        </td>
+                        <td style={{ maxWidth: 180, fontSize: 12, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.reason ?? undefined}>
+                          {t.reason ?? "—"}
                         </td>
                         <td>
                           <button className="btn danger sm" aria-label={`删除 ${t.tradeDate} ${t.symbol} 交易`} onClick={() => removeTrade(t.id)}>删除</button>

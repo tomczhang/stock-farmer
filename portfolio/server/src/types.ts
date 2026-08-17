@@ -32,8 +32,10 @@ export interface StatementPayload {
   dividends?: ImportedDividend[];
 }
 
-export type TierTriggerType = "pct_drop" | "price";
+export type TierTriggerType = "pct_drop" | "price" | "pct_gain";
 export type TierAllocType = "pct" | "amount";
+
+export type PlanDirection = "add" | "trim";
 
 export type Bucket = "aggressive" | "defensive" | "stable" | "grant";
 
@@ -197,6 +199,7 @@ export interface TradeInput {
   quantity: number;
   price: number;
   fee?: number;
+  reason?: string;
 }
 
 export interface PlanTierInput {
@@ -218,6 +221,7 @@ export interface PlanInput {
   scenarioName?: string;
   templateWeights?: number[];
   note?: string;
+  direction?: PlanDirection;
   tiers: PlanTierInput[];
 }
 
@@ -259,4 +263,19 @@ export interface ComputedPlan {
   totalPlanned: number;
   tiers: ComputedTier[];
   warning?: string;
+}
+
+export interface MonthlyReviewInput {
+  attribution?: string;
+  mistakes?: string;
+  improvements?: string;
+  macroNote?: string;
+}
+
+export interface WatchlistInput {
+  market: string;
+  symbol: string;
+  name?: string;
+  note?: string;
+  refHigh?: number | null;
 }

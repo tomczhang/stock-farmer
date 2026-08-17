@@ -19,6 +19,9 @@ import CashFlowsPage from "./pages/CashFlowsPage";
 
 const DataPage = lazy(() => import("./pages/DataPage"));
 const NotesPage = lazy(() => import("./pages/NotesPage"));
+const PerformancePage = lazy(() => import("./pages/PerformancePage"));
+const ReviewsPage = lazy(() => import("./pages/ReviewsPage"));
+const WatchlistPage = lazy(() => import("./pages/WatchlistPage"));
 
 interface AuthState {
   me: Me | null;
@@ -94,9 +97,12 @@ function Layout() {
             <NavLink to="/" end>
               资产总览
             </NavLink>
+            <NavLink to="/performance">绩效</NavLink>
+            <NavLink to="/reviews">复盘</NavLink>
             <NavLink to="/holdings">持仓分析</NavLink>
             <NavLink to="/cashflows">现金流</NavLink>
             <NavLink to="/plans">加仓计划</NavLink>
+            <NavLink to="/watchlist">观察</NavLink>
             <NavLink to="/notes">笔记本</NavLink>
             <NavLink to="/data">数据管理</NavLink>
           </nav>
@@ -137,10 +143,34 @@ const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { index: true, element: <DashboardPage /> },
+      {
+        path: "performance",
+        element: (
+          <Suspense fallback={<div className="empty"><span className="spin dark" aria-label="正在加载绩效" /></div>}>
+            <PerformancePage />
+          </Suspense>
+        ),
+      },
+      {
+        path: "reviews",
+        element: (
+          <Suspense fallback={<div className="empty"><span className="spin dark" aria-label="正在加载复盘" /></div>}>
+            <ReviewsPage />
+          </Suspense>
+        ),
+      },
       { path: "holdings", element: <HoldingsPage /> },
       { path: "cashflows", element: <CashFlowsPage /> },
       { path: "statements", element: <Navigate to="/data" replace /> },
       { path: "plans", element: <PlansPage /> },
+      {
+        path: "watchlist",
+        element: (
+          <Suspense fallback={<div className="empty"><span className="spin dark" aria-label="正在加载观察窗口" /></div>}>
+            <WatchlistPage />
+          </Suspense>
+        ),
+      },
       {
         path: "notes",
         element: (

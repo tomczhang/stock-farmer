@@ -2,7 +2,7 @@ import type { AppDatabase } from "./db.js";
 import { ConflictError, ValidationError } from "./errors.js";
 import { coverage, normalizeMarket, requireCurrency, roundAmount } from "./finance.js";
 import type { RiskService } from "./risk.js";
-import type { ComputedPlan, ComputedTier, Currency, PlanInput, PlanTierInput } from "./types.js";
+import type { ComputedPlan, ComputedTier, Currency, PlanDirection, PlanInput, PlanTierInput } from "./types.js";
 
 /** 基础金字塔计算保持为纯函数；组合上下文由 service 的 preview 叠加。 */
 export function computePlan(
@@ -69,28 +69,42 @@ function validatePlanInput(input: PlanInput) {
   if (!input.symbol?.trim()) throw new ValidationError("缺少标的代码");
   normalizeMarket(input.market);
   requireCurrency(input.currency);
-  if (!(input.basePrice > 0) || !(input.totalBudget > 0)) throw new ValidationError("基准价和总预算需为正数");
+  const direction = planDirection(input);
+  if (!(input.basePrice > 0)) throw new ValidationError("基准价需为正数");
+  // trim 计划不使用总预算（卖出量由档位相对持仓定义），允许为 0
+  if (direction === "add" && !(input.totalBudget > 0)) throw new ValidationError("基准价和总预算需为正数");
+  if (direction === "trim" && input.totalBudget < 0) throw new ValidationError("总预算不能为负");
   if (!Number.isFinite(input.estimatedFee ?? 0) || (input.estimatedFee ?? 0) < 0) {
     throw new ValidationError("预计交易费不能为负");
   }
   if (!Array.isArray(input.tiers) || input.tiers.length === 0) throw new ValidationError("至少需要 1 个档位");
+  const allowedTriggers = direction === "trim" ? ["pct_gain", "price"] : ["pct_drop", "price"];
   for (const tier of input.tiers) {
     if ((tier as PlanTierInput & { side?: string }).side && (tier as PlanTierInput & { side?: string }).side !== "buy") {
       throw new ValidationError("加仓方案只支持买入档位");
     }
-    if (!["pct_drop", "price"].includes(tier.triggerType)) throw new ValidationError("触发方式非法");
+    if (!allowedTriggers.includes(tier.triggerType)) {
+      throw new ValidationError(direction === "trim" ? "减仓计划仅支持 pct_gain/price 触发" : "触发方式非法");
+    }
     if (!["pct", "amount"].includes(tier.allocType)) throw new ValidationError("仓位方式非法");
     if (!Number.isFinite(tier.triggerValue) || tier.triggerValue <= 0) throw new ValidationError("触发值非法");
     if (tier.triggerType === "pct_drop" && tier.triggerValue >= 100) throw new ValidationError("跌幅需小于 100%");
     if (!Number.isFinite(tier.allocValue) || tier.allocValue <= 0) throw new ValidationError("仓位值非法");
+    if (direction === "trim" && tier.allocType === "pct" && tier.allocValue > 100) throw new ValidationError("单档卖出比例需 ≤ 100%");
   }
-  normalizedTiers(input);
+  if (direction === "add") normalizedTiers(input);
+}
+
+function planDirection(input: Pick<PlanInput, "direction">): PlanDirection {
+  const direction = input.direction ?? "add";
+  if (direction !== "add" && direction !== "trim") throw new ValidationError("计划方向仅支持 add/trim");
+  return direction;
 }
 
 interface TierRow {
   id: number;
   seq: number;
-  trigger_type: "pct_drop" | "price";
+  trigger_type: "pct_drop" | "price" | "pct_gain";
   trigger_value: number;
   alloc_type: "pct" | "amount";
   alloc_value: number;
@@ -109,6 +123,7 @@ interface PlanRow {
   scenario_name: string | null;
   template_weights_json: string | null;
   note: string | null;
+  direction: PlanDirection;
   created_at: string;
   updated_at: string;
 }
@@ -263,26 +278,138 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
     };
   }
 
+  /** 减仓（trim）预览：逐档模拟卖出后持仓/成本（等比结转，每股摊薄成本不变）/回收现金/集中度/现金率。不计税负。 */
+  function previewTrim(
+    userId: number,
+    input: PlanInput,
+    metadata: { id?: number; createdAt?: string; updatedAt?: string } = {},
+    suppliedTiers?: Array<PlanTierInput & { id?: number; filledAt?: string | null }>,
+  ) {
+    validatePlanInput(input);
+    const tiers = [...(suppliedTiers ?? input.tiers.map((tier) => ({ ...tier })))].sort((a, b) => a.seq - b.seq);
+    const currency = requireCurrency(input.currency);
+    const rate = fxToUsd[currency];
+    if (!(rate > 0)) throw new ValidationError(`缺少 ${currency} 汇率`);
+    const context = risk.evaluateScenario(userId, { market: input.market, symbol: input.symbol, currency }).context;
+    const currentQuantity = Number(context.currentQuantity ?? 0);
+    if (!(currentQuantity > 0)) throw new ValidationError("当前无持仓，无法创建减仓计划");
+    const currentBookCostUsd = context.currentBookCostUsd as number | null;
+    const currentBookCost = currentBookCostUsd == null ? null : currentBookCostUsd / rate;
+    const otherPositionsUsd = Number(context.positionsValueUsd ?? 0) - Number(context.symbolValueUsd ?? 0);
+    const bucketValueUsd = context.bucketValueUsd as number | null;
+    const otherBucketUsd = bucketValueUsd == null ? null : bucketValueUsd - Number(context.symbolValueUsd ?? 0);
+    const initialCashUsd = Number(context.cashUsd ?? 0);
+    const estimatedFee = input.estimatedFee ?? 0;
+
+    // 先算每档卖出数量并校验合计不超卖
+    let cumulativeQty = 0;
+    const computed = tiers.map((tier) => {
+      const sellPrice = tier.triggerType === "pct_gain" ? input.basePrice * (1 + tier.triggerValue / 100) : tier.triggerValue;
+      if (!(sellPrice > 0)) throw new ValidationError(`第 ${tier.seq} 档卖出价非法`);
+      const quantity = tier.allocType === "pct" ? (currentQuantity * tier.allocValue) / 100 : tier.allocValue / sellPrice;
+      if (!(quantity > 0)) throw new ValidationError(`第 ${tier.seq} 档卖出数量非法`);
+      cumulativeQty += quantity;
+      return { tier, sellPrice, quantity, cumulativeQty };
+    });
+    if (cumulativeQty > currentQuantity * (1 + 1e-6)) {
+      throw new ValidationError(
+        `档位合计卖出 ${cumulativeQty.toFixed(4)} 股超出当前持仓 ${currentQuantity.toFixed(4)} 股`,
+      );
+    }
+
+    const totalProceeds = computed.reduce((sum, item) => sum + item.quantity * item.sellPrice, 0);
+    let cumulativeProceeds = 0;
+    const enrichedTiers = computed.map(({ tier, sellPrice, quantity, cumulativeQty: cumQty }) => {
+      const proceeds = quantity * sellPrice;
+      cumulativeProceeds += proceeds;
+      const cumulativeFee = totalProceeds > 0 ? (estimatedFee * cumulativeProceeds) / totalProceeds : 0;
+      const postQuantity = currentQuantity - cumQty;
+      const soldRatio = cumQty / currentQuantity;
+      const postBookCost = currentBookCost == null ? null : currentBookCost * (1 - soldRatio);
+      const avgCost = currentBookCost == null ? null : currentBookCost / currentQuantity;
+      // 以该档触发价估値标的市值，推导卖出后集中度与现金率
+      const symbolValueUsdAfter = postQuantity * sellPrice * rate;
+      const positionsValueUsdAfter = otherPositionsUsd + symbolValueUsdAfter;
+      const bucketValueUsdAfter = otherBucketUsd == null ? null : otherBucketUsd + symbolValueUsdAfter;
+      const cashUsdAfter = initialCashUsd + (cumulativeProceeds - cumulativeFee) * rate;
+      const netAssetsUsdAfter = positionsValueUsdAfter + cashUsdAfter;
+      return {
+        ...tier,
+        sellPrice: roundAmount(sellPrice, 4),
+        quantity: roundAmount(quantity, 4),
+        cumulativeQuantity: roundAmount(cumQty, 4),
+        proceeds: roundAmount(proceeds),
+        cumulativeProceeds: roundAmount(cumulativeProceeds),
+        cumulativeEstimatedFee: roundAmount(cumulativeFee),
+        netProceeds: roundAmount(cumulativeProceeds - cumulativeFee),
+        postQuantity: roundAmount(postQuantity, 4),
+        postBookCost: postBookCost == null ? null : roundAmount(postBookCost),
+        postAvgCost: avgCost == null ? null : roundAmount(avgCost, 4),
+        postSymbolRatio: positionsValueUsdAfter > 0 ? roundAmount(symbolValueUsdAfter / positionsValueUsdAfter, 4) : 0,
+        postBucketRatio:
+          bucketValueUsdAfter == null || positionsValueUsdAfter <= 0
+            ? null
+            : roundAmount(bucketValueUsdAfter / positionsValueUsdAfter, 4),
+        postCashRatio: netAssetsUsdAfter > 0 ? roundAmount(cashUsdAfter / netAssetsUsdAfter, 4) : 0,
+        postCashUsd: roundAmount(cashUsdAfter),
+      };
+    });
+    const finalTier = enrichedTiers.at(-1)!;
+    const missing = currentBookCost == null ? ["current_book_cost"] : [];
+    return {
+      id: metadata.id,
+      direction: "trim" as const,
+      symbol: input.symbol.trim().toUpperCase(),
+      name: input.name || input.symbol,
+      market: normalizeMarket(input.market),
+      currency,
+      scenarioName: input.scenarioName?.trim() || `${input.symbol.trim().toUpperCase()} 减仓方案`,
+      basePrice: input.basePrice,
+      totalBudget: input.totalBudget ?? 0,
+      estimatedFee: roundAmount(estimatedFee),
+      note: input.note ?? null,
+      createdAt: metadata.createdAt,
+      updatedAt: metadata.updatedAt,
+      currentPosition: {
+        quantity: currentQuantity,
+        bookCost: currentBookCost == null ? null : roundAmount(currentBookCost),
+        bookCostUsd: currentBookCostUsd,
+      },
+      totalSellQuantity: roundAmount(cumulativeQty, 4),
+      totalProceeds: roundAmount(totalProceeds),
+      totalNetProceeds: roundAmount(totalProceeds - estimatedFee),
+      final: {
+        quantity: finalTier.postQuantity,
+        bookCost: finalTier.postBookCost,
+        avgCost: finalTier.postAvgCost,
+        symbolRatio: finalTier.postSymbolRatio,
+        bucketRatio: finalTier.postBucketRatio,
+        cashRatio: finalTier.postCashRatio,
+      },
+      coverage: coverage(1, missing.length ? 0 : 1, missing),
+      tiers: enrichedTiers,
+    };
+  }
+
   function serialize(userId: number, row: PlanRow) {
     const tiers = tiersForPlan(row.id);
-    return preview(
-      userId,
-      {
-        symbol: row.symbol,
-        name: row.name,
-        market: row.market,
-        currency: row.currency,
-        basePrice: row.base_price,
-        totalBudget: row.total_budget,
-        estimatedFee: row.estimated_fee,
-        scenarioName: row.scenario_name ?? undefined,
-        templateWeights: row.template_weights_json ? (JSON.parse(row.template_weights_json) as number[]) : undefined,
-        note: row.note ?? undefined,
-        tiers,
-      },
-      { id: row.id, createdAt: row.created_at, updatedAt: row.updated_at },
+    const input: PlanInput = {
+      symbol: row.symbol,
+      name: row.name,
+      market: row.market,
+      currency: row.currency,
+      basePrice: row.base_price,
+      totalBudget: row.total_budget,
+      estimatedFee: row.estimated_fee,
+      scenarioName: row.scenario_name ?? undefined,
+      templateWeights: row.template_weights_json ? (JSON.parse(row.template_weights_json) as number[]) : undefined,
+      note: row.note ?? undefined,
+      direction: row.direction ?? "add",
       tiers,
-    );
+    };
+    const metadata = { id: row.id, createdAt: row.created_at, updatedAt: row.updated_at };
+    if ((row.direction ?? "add") === "trim") return previewTrim(userId, input, metadata, tiers);
+    return { direction: "add" as const, ...preview(userId, input, metadata, tiers) };
   }
 
   function replaceTiers(planId: number, tiers: PlanTierInput[]) {
@@ -312,7 +439,7 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
     }
     db.prepare(
       `UPDATE pyramid_plans SET symbol = ?, name = ?, market = ?, currency = ?, base_price = ?, total_budget = ?, estimated_fee = ?,
-       scenario_name = ?, template_weights_json = ?, note = ?, updated_at = datetime('now') WHERE id = ?`,
+       scenario_name = ?, template_weights_json = ?, note = ?, direction = ?, updated_at = datetime('now') WHERE id = ?`,
     ).run(
       input.symbol.trim().toUpperCase(),
       input.name || input.symbol,
@@ -321,9 +448,10 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
       input.basePrice,
       input.totalBudget,
       input.estimatedFee ?? 0,
-      input.scenarioName?.trim() || existing.scenario_name || `${input.symbol.trim().toUpperCase()} 加仓方案`,
+      input.scenarioName?.trim() || existing.scenario_name || `${input.symbol.trim().toUpperCase()} ${planDirection(input) === "trim" ? "减仓" : "加仓"}方案`,
       input.templateWeights ? JSON.stringify(input.templateWeights) : null,
       input.note ?? null,
+      planDirection(input),
       planId,
     );
     replaceTiers(planId, tiers);
@@ -339,6 +467,7 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
     if (!tierRow) return null;
     if ((filled && tierRow.filled_at) || (!filled && !tierRow.filled_at)) return row;
     if (filled) {
+      // 减仓档位无需 safe-add 安全门（卖出只会降低集中度、提高现金率），但仍受单一活动计划约束
       const active = db
         .prepare(
           `SELECT p.id, p.scenario_name FROM pyramid_plans p
@@ -353,15 +482,17 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
           activeScenarioName: active.scenario_name,
         });
       }
-      const plan = serialize(userId, row);
-      const tier = plan.tiers.find((item) => item.id === tierId);
-      if (!tier) return null;
-      const candidate = tier.safety.candidate as { safe?: boolean } | null;
-      if (plan.coverage.status !== "complete" || !tier.safety.complete || candidate?.safe !== true) {
-        throw new ConflictError("安全校验未通过，不能标记该档已执行", {
-          missing: tier.safety.missing,
-          violations: candidate?.safe === false ? tier.safety.candidate?.violations : ["incomplete"],
-        });
+      if ((row.direction ?? "add") === "add") {
+        const plan = serialize(userId, row) as ReturnType<typeof serialize> & { tiers: Array<{ id?: number; safety: any }> };
+        const tier = plan.tiers.find((item) => item.id === tierId);
+        if (!tier) return null;
+        const candidate = tier.safety.candidate as { safe?: boolean } | null;
+        if (plan.coverage.status !== "complete" || !tier.safety.complete || candidate?.safe !== true) {
+          throw new ConflictError("安全校验未通过，不能标记该档已执行", {
+            missing: tier.safety.missing,
+            violations: candidate?.safe === false ? tier.safety.candidate?.violations : ["incomplete"],
+          });
+        }
       }
     }
     db.prepare("UPDATE plan_tiers SET filled_at = ? WHERE id = ? AND plan_id = ?").run(
@@ -396,19 +527,25 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
     },
 
     preview(userId: number, input: PlanInput) {
+      if (planDirection(input) === "trim") return previewTrim(userId, input);
       const normalized = { ...input, tiers: normalizedTiers(input) };
-      return preview(userId, normalized);
+      return { direction: "add" as const, ...preview(userId, normalized) };
     },
 
     create(userId: number, input: PlanInput) {
       validatePlanInput(input);
-      const tiers = normalizedTiers(input);
-      computePlan(input.basePrice, input.totalBudget, tiers);
+      const direction = planDirection(input);
+      const tiers = direction === "trim" ? input.tiers.map((tier) => ({ ...tier })) : normalizedTiers(input);
+      if (direction === "trim") {
+        previewTrim(userId, input); // 含超卖校验
+      } else {
+        computePlan(input.basePrice, input.totalBudget, tiers);
+      }
       const result = db
         .prepare(
           `INSERT INTO pyramid_plans
-           (user_id, symbol, name, market, currency, base_price, total_budget, estimated_fee, scenario_name, template_weights_json, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (user_id, symbol, name, market, currency, base_price, total_budget, estimated_fee, scenario_name, template_weights_json, note, direction)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           userId,
@@ -419,9 +556,10 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
           input.basePrice,
           input.totalBudget,
           input.estimatedFee ?? 0,
-          input.scenarioName?.trim() || `${input.symbol.trim().toUpperCase()} 加仓方案`,
+          input.scenarioName?.trim() || `${input.symbol.trim().toUpperCase()} ${direction === "trim" ? "减仓" : "加仓"}方案`,
           input.templateWeights ? JSON.stringify(input.templateWeights) : null,
           input.note ?? null,
+          direction,
         );
       const planId = Number(result.lastInsertRowid);
       replaceTiersTx(planId, tiers);
@@ -430,8 +568,13 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
 
     update(userId: number, planId: number, input: PlanInput) {
       validatePlanInput(input);
-      const tiers = normalizedTiers(input);
-      computePlan(input.basePrice, input.totalBudget, tiers);
+      const direction = planDirection(input);
+      const tiers = direction === "trim" ? input.tiers.map((tier) => ({ ...tier })) : normalizedTiers(input);
+      if (direction === "trim") {
+        previewTrim(userId, input);
+      } else {
+        computePlan(input.basePrice, input.totalBudget, tiers);
+      }
       const updated = updatePlanTx(userId, planId, input, tiers);
       return updated ? serialize(userId, updated) : null;
     },
@@ -445,7 +588,28 @@ export function createPlanService(db: AppDatabase, fxToUsd: Record<string, numbe
       for (const id of input.planIds ?? []) {
         const row = db.prepare("SELECT * FROM pyramid_plans WHERE id = ? AND user_id = ?").get(id, userId) as PlanRow | undefined;
         if (!row) throw new ValidationError(`计划 ${id} 不存在`);
-        scenarios.push(serialize(userId, row));
+        if ((row.direction ?? "add") === "trim") throw new ValidationError("减仓方案不参与方案比较");
+        const tiers = tiersForPlan(row.id);
+        scenarios.push(
+          preview(
+            userId,
+            {
+              symbol: row.symbol,
+              name: row.name,
+              market: row.market,
+              currency: row.currency,
+              basePrice: row.base_price,
+              totalBudget: row.total_budget,
+              estimatedFee: row.estimated_fee,
+              scenarioName: row.scenario_name ?? undefined,
+              templateWeights: row.template_weights_json ? (JSON.parse(row.template_weights_json) as number[]) : undefined,
+              note: row.note ?? undefined,
+              tiers,
+            },
+            { id: row.id, createdAt: row.created_at, updatedAt: row.updated_at },
+            tiers,
+          ),
+        );
       }
       if (scenarios.length < 2) throw new ValidationError("至少选择两个方案进行比较");
       const first = scenarios[0];

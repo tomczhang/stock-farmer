@@ -192,13 +192,131 @@ export interface TradeRow {
   price: number;
   fee: number;
   source: string;
+  reason: string | null;
   createdAt: string;
+}
+
+export interface PerformanceMonth {
+  month: string;
+  netAssetsDisplay: number;
+  flowDisplay: number;
+  pnlDisplay: number | null;
+  nav: number | null;
+  cumulativeReturn: number | null;
+  drawdown: number | null;
+  carried: boolean;
+  carriedBrokers: string[];
+  warning: string | null;
+}
+
+export interface PerformanceKpi {
+  cumulativeReturn: number | null;
+  annualizedReturn: number | null;
+  annualizedPartial: boolean;
+  maxDrawdown: number | null;
+  cumulativeInDisplay: number;
+  cumulativeOutDisplay: number;
+  netInvestedDisplay: number;
+  latestMonthPnlDisplay: number | null;
+  avgMonthlyPnlDisplay: number | null;
+  monthCount: number;
+}
+
+export interface PerformanceResponse {
+  display: Currency;
+  scope: "self" | "all";
+  months: PerformanceMonth[];
+  kpi: PerformanceKpi;
+}
+
+export interface ClosedStats {
+  display: Currency;
+  closedCount: number;
+  unknownCount: number;
+  winCount: number;
+  lossCount: number;
+  winRate: number | null;
+  avgWinDisplay: number | null;
+  avgLossDisplay: number | null;
+  payoffRatio: number | null;
+  maxWinDisplay: number | null;
+  maxLossDisplay: number | null;
+  avgHoldingDays: number | null;
+  totalFeesDisplay: number;
+  feeRatio: number | null;
+  histogram: {
+    bucketWidthDisplay: number;
+    buckets: Array<{ from: number | null; to: number | null; count: number }>;
+  };
+  openHoldingAges: Array<{ key: string; firstBuyDate: string; days: number }>;
+}
+
+export interface ReviewTopTrade {
+  id: number;
+  symbol: string;
+  market: string;
+  name: string;
+  tradeDate: string;
+  pnlDisplay: number;
+  reason: string | null;
+}
+
+export interface ReviewResponse {
+  month: string;
+  display: Currency;
+  scope: "self" | "all";
+  auto: {
+    startAssetsDisplay: number | null;
+    endAssetsDisplay: number;
+    assetsChangeDisplay: number | null;
+    flowDisplay: number;
+    pnlDisplay: number | null;
+    monthlyReturn: number | null;
+    maxDrawdownToDate: number | null;
+    topWins: ReviewTopTrade[];
+    topLosses: ReviewTopTrade[];
+    closedCount: number;
+    feesDisplay: number;
+    discipline: Array<{ key: string; ok: boolean; note: string }>;
+  } | null;
+  manual: {
+    month: string;
+    attribution: string;
+    mistakes: string;
+    improvements: string;
+    macroNote: string;
+    createdAt: string | null;
+    updatedAt: string | null;
+  };
+}
+
+export interface WatchlistItem {
+  id: number;
+  market: string;
+  symbol: string;
+  name: string;
+  note: string;
+  refHigh: number | null;
+  refHighDate: string | null;
+  createdAt: string;
+  price: number | null;
+  currency: string | null;
+  drawdownFromHigh: number | null;
+}
+
+export interface ReviewListItem {
+  month: string;
+  attribution: string;
+  mistakes: string;
+  improvements: string;
+  macroNote: string;
+  updatedAt: string;
 }
 
 export interface PlanTier {
   id: number;
   seq: number;
-  triggerType: "pct_drop" | "price";
+  triggerType: "pct_drop" | "price" | "pct_gain";
   triggerValue: number;
   allocType: "pct" | "amount";
   allocValue: number;
@@ -213,6 +331,16 @@ export interface PlanTier {
   postBookCost?: number | null;
   postAvgCost?: number | null;
   safety?: SafetyAddResult | null;
+  // trim（减仓）档位字段
+  sellPrice?: number;
+  quantity?: number;
+  cumulativeQuantity?: number;
+  proceeds?: number;
+  cumulativeProceeds?: number;
+  netProceeds?: number;
+  postSymbolRatio?: number | null;
+  postBucketRatio?: number | null;
+  postCashRatio?: number | null;
 }
 
 export interface Plan {
@@ -238,6 +366,10 @@ export interface Plan {
   totalPlannedUsd?: number;
   estimatedFee?: number;
   estimatedFeeUsd?: number;
+  direction?: "add" | "trim";
+  totalSellQuantity?: number;
+  totalProceeds?: number;
+  totalNetProceeds?: number;
 }
 
 export type CapitalEventType = "cash_in" | "cash_out" | "transfer_in" | "transfer_out" | "adjustment";
@@ -396,7 +528,7 @@ export interface SafetyAddResult {
 
 export interface PlanInputTier {
   seq: number;
-  triggerType: "pct_drop" | "price";
+  triggerType: "pct_drop" | "price" | "pct_gain";
   triggerValue: number;
   allocType: "pct" | "amount";
   allocValue: number;
@@ -413,6 +545,7 @@ export interface PlanInput {
   note?: string;
   scenarioName?: string;
   templateWeights?: number[];
+  direction?: "add" | "trim";
   tiers: PlanInputTier[];
 }
 
