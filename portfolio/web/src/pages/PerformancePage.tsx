@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { Chart, fmtCompact, fmtMoney, GAIN, HAIRLINE, LIGHT_TOOLTIP, LOSS, MUTED_BAR_OPACITY } from "../components/Chart";
+import { useGraceSpinner } from "../lib/useGraceSpinner";
 import type { Currency, ClosedStats, PerformanceResponse } from "../types";
 
 const CCY_SIGN: Record<Currency, string> = { USD: "$", HKD: "HK$", CNY: "¥" };
@@ -269,7 +270,10 @@ export default function PerformancePage() {
     };
   }, [stats]);
 
-  if (busy) return <div className="empty"><span className="spin dark" /></div>;
+  // 首载才整页等待（220ms 宽限）；切 scope/币种时保留旧内容
+  const firstLoading = busy && !data;
+  const showSpinner = useGraceSpinner(firstLoading);
+  if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" /></div> : null;
 
   return (
     <div className="fade-in">

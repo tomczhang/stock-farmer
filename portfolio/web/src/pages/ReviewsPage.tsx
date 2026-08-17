@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api";
 import { fmtMoney } from "../components/Chart";
+import { useGraceSpinner } from "../lib/useGraceSpinner";
 import type { Currency, ReviewListItem, ReviewResponse } from "../types";
 
 const CCY_SIGN: Record<Currency, string> = { USD: "$", HKD: "HK$", CNY: "¥" };
@@ -90,7 +91,10 @@ export default function ReviewsPage() {
   }, [reviewed]);
   const reviewedSet = useMemo(() => new Set(reviewed.map((r) => r.month)), [reviewed]);
 
-  if (busy) return <div className="empty"><span className="spin dark" /></div>;
+  // 首载才整页等待（220ms 宽限）；切月份/币种时保留旧内容
+  const firstLoading = busy && !review;
+  const showSpinner = useGraceSpinner(firstLoading);
+  if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" /></div> : null;
 
   return (
     <div className="fade-in">

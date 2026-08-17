@@ -297,7 +297,7 @@ export default function CashFlowsPage() {
           <div className="field"><label htmlFor="filter-category">类别</label><select id="filter-category" className="select sm" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}><option value="">全部</option><option value="capital">外部资本</option><option value="trade">买卖</option><option value="dividend">股息</option><option value="realized_gain">已实现资本利得</option><option value="fee">费用</option></select></div>
           <div className="field"><label htmlFor="filter-symbol">标的</label><input id="filter-symbol" className="input sm" placeholder="全部" value={filters.symbol} onChange={(e) => setFilters({ ...filters, symbol: e.target.value })} /></div>
         </div>
-        {busy ? <div className="empty"><span className="spin dark" /></div> : (
+        {busy && !flows ? <div className="empty"><span className="spin dark" /></div> : (
           <div className="table-scroll" tabIndex={0} aria-label="现金流明细，可横向滚动">
             <table className="table">
               <thead><tr><th>日期</th><th>类别</th><th>标的</th><th>币种</th><th className="num">现金影响</th><th className="num">盈亏影响</th><th>来源</th></tr></thead>

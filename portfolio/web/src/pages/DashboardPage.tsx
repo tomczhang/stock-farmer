@@ -6,6 +6,7 @@ import { Chart, fmtCompact, fmtMoney, GAIN, HAIRLINE, LIGHT_TOOLTIP, LOSS, PALET
 import { ValueFlash } from "../components/ValueFlash";
 import { describeCoverageItems } from "../lib/portfolio/coverage";
 import { aggregateSummaryPositions } from "../lib/portfolio/positions";
+import { useGraceSpinner } from "../lib/useGraceSpinner";
 import { BUCKET_LABELS, type BucketBudget, type Currency, type RiskSettings, type Summary } from "../types";
 
 const CCY_SIGN: Record<Currency, string> = { USD: "$", HKD: "HK$", CNY: "¥" };
@@ -166,7 +167,10 @@ export default function DashboardPage() {
     };
   }, [summary]);
 
-  if (busy) return <div className="empty"><span className="spin dark" /></div>;
+  // 首载才整页等待（带 220ms 宽限，快请求不闪 spinner）；已有数据时切 scope/币种不清空旧内容
+  const firstLoading = busy && !summary;
+  const showSpinner = useGraceSpinner(firstLoading);
+  if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" /></div> : null;
 
   return (
     <div className="fade-in">

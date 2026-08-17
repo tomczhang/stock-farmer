@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import { fmtMoney } from "../components/Chart";
 import { describeCoverageItems } from "../lib/portfolio/coverage";
 import { aggregateSummaryPositions, type InstrumentPosition } from "../lib/portfolio/positions";
+import { useGraceSpinner } from "../lib/useGraceSpinner";
 import { BUCKET_LABELS, type Bucket, type Coverage, type Summary } from "../types";
 
 const COST_SOURCE_LABEL: Record<string, string> = {
@@ -112,7 +113,10 @@ export default function HoldingsPage() {
   const externalNetInvested = summary?.costs?.externalNetInvested ?? null;
   const missingCount = instruments.filter((position) => position.coverage.status !== "complete").length;
 
-  if (busy) return <div className="empty"><span className="spin dark" aria-label="正在加载持仓" /></div>;
+  // 首载才整页等待（220ms 宽限）；切 scope 时保留旧内容
+  const firstLoading = busy && !summary;
+  const showSpinner = useGraceSpinner(firstLoading);
+  if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" aria-label="正在加载持仓" /></div> : null;
 
   return (
     <div className="fade-in">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
 import { fmtMoney } from "../components/Chart";
 import { ValueFlash } from "../components/ValueFlash";
+import { useGraceSpinner } from "../lib/useGraceSpinner";
 import type { WatchlistItem } from "../types";
 
 interface AddForm {
@@ -24,6 +25,7 @@ function drawdownClass(value: number | null) {
 
 export default function WatchlistPage() {
   const [items, setItems] = useState<WatchlistItem[]>([]);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [form, setForm] = useState<AddForm>(EMPTY_FORM);
   const [busy, setBusy] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,6 +43,7 @@ export default function WatchlistPage() {
       setError(err instanceof ApiError ? err.message : "观察列表加载失败");
     } finally {
       setBusy(false);
+      setLoadedOnce(true);
     }
   }, []);
 
@@ -108,7 +111,10 @@ export default function WatchlistPage() {
     }
   };
 
-  if (busy) return <div className="empty"><span className="spin dark" /></div>;
+  // 首载才整页等待（220ms 宽限）；后续刷新保留旧内容
+  const firstLoading = busy && !loadedOnce;
+  const showSpinner = useGraceSpinner(firstLoading);
+  if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" /></div> : null;
 
   return (
     <div className="fade-in">

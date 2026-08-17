@@ -613,7 +613,7 @@ export default function PlansPage() {
 
       <section className="card section-card" aria-labelledby="scenario-title">
         <div className="card-h" id="scenario-title">同股方案<span className="tag">选择至少 2 个并排比较</span></div>
-        {busy ? <div className="empty"><span className="spin dark" /></div> : plansForDecision.length === 0 ? (
+        {busy && plans.length === 0 ? <div className="empty"><span className="spin dark" /></div> : plansForDecision.length === 0 ? (
           <div className="empty scenario-empty">
             <p>还没有 {decisionPosition?.symbol ?? "该标的"} 的方案。</p>
             <div className="template-actions">

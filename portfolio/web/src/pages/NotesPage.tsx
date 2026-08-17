@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api";
+import { useGraceSpinner } from "../lib/useGraceSpinner";
 
 interface Note {
   id: number;
@@ -78,6 +79,7 @@ function renderMarkdown(src: string): ReactNode[] {
 
 export default function NotesPage() {
   const [notes, setNotes] = useState<Note[]>([]);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -94,6 +96,7 @@ export default function NotesPage() {
       setError(err instanceof ApiError ? err.message : "笔记加载失败");
     } finally {
       setBusy(false);
+      setLoadedOnce(true);
     }
   }, []);
 
@@ -141,7 +144,10 @@ export default function NotesPage() {
     }
   };
 
-  if (busy) return <div className="empty"><span className="spin dark" aria-label="正在加载笔记" /></div>;
+  // 首载才整页等待（220ms 宽限）；后续刷新保留旧内容
+  const firstLoading = busy && !loadedOnce;
+  const showSpinner = useGraceSpinner(firstLoading);
+  if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" aria-label="正在加载笔记" /></div> : null;
 
   return (
     <div className="fade-in">
