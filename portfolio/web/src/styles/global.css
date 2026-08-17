@@ -256,12 +256,8 @@ button { font-family: inherit; }
 .spin.dark { border-color: var(--border); border-top-color: var(--brand); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 页面入场：只做轻微上浮+淡入；缩放/模糊留给小面积弹层，整页缩放会晞眼 */
-.fade-in { animation: fadeIn 0.22s var(--ease-enter) both; }
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
+/* 页面入场不做动画：每次加载/切换都重播的淡入会读作闪动；动效只留给事件驱动的局部微交互（value-flash/滑块/按钮） */
+.fade-in { animation: none; }
 
 /* ---------- 资本控制中心 ---------- */
 .sr-only {
@@ -306,9 +302,8 @@ button { font-family: inherit; }
 }
 .section-card { margin-top: 16px; }
 
-/* 减少动态：信息照常到达，只跳过旅程（闪色保留，位移/模糊/滑动归零） */
+/* 减少动态：信息照常到达，只跳过旅程（闪色保留，滑动归零） */
 @media (prefers-reduced-motion: reduce) {
-  .fade-in { animation: none; }
   .scope-toggle::before { transition: none !important; }
   .vf { transition: none; }
 }
