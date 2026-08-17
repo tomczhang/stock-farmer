@@ -285,6 +285,21 @@ export function createPerformanceService(
     const capital = cumulativeCapital(userId, scope);
     const cvt = (amountUsd: number) => roundAmount(fromUsd(amountUsd, display, fxToUsd));
 
+    // 累计外部净投入序列（MWR 本金线）：首个快照月之前的存量事件计入基线，两线起点对齐真实本金
+    const investedByMonth = new Map<string, number>();
+    if (points.length > 0) {
+      const firstMonth = points[0].month;
+      let baseline = 0;
+      for (const [month, flow] of flows) {
+        if (month < firstMonth) baseline += flow;
+      }
+      let running = baseline;
+      for (const p of points) {
+        running += flows.get(p.month) ?? 0;
+        investedByMonth.set(p.month, running);
+      }
+    }
+
     const navPoints = series.filter((s) => s.nav != null);
     const lastNav = navPoints.at(-1)?.nav ?? null;
     const monthsSpan = navPoints.length - 1;
@@ -308,6 +323,7 @@ export function createPerformanceService(
         month: s.month,
         netAssetsDisplay: cvt(s.netAssetsUsd),
         flowDisplay: cvt(s.flowUsd),
+        investedDisplay: cvt(investedByMonth.get(s.month) ?? 0),
         pnlDisplay: s.pnlUsd == null ? null : cvt(s.pnlUsd),
         nav: s.nav,
         cumulativeReturn: s.nav == null ? null : roundAmount(s.nav - 1, 6),

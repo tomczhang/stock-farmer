@@ -302,6 +302,50 @@ button { font-family: inherit; }
 }
 .section-card { margin-top: 16px; }
 
+/* ---------- 总览 Hero（浅色 B 案）与持仓分布 ---------- */
+.hero-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: stretch; margin-bottom: 16px; }
+.hero-card { display: flex; flex-direction: column; }
+.hero-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.hero-nums { display: flex; gap: 36px; align-items: flex-end; flex-wrap: wrap; }
+.hero-num .k { font-size: 12px; color: var(--ink-3); font-weight: 600; }
+.hero-num .v { font-size: 20px; font-weight: 800; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.hero-num.main .v { font-size: 30px; }
+.hero-metrics {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  border-top: 1px solid var(--bg-muted); margin-top: 10px; padding-top: 12px;
+}
+.hero-metrics > div { display: flex; flex-direction: column; gap: 1px; padding: 0 4px; }
+.hero-metrics > div + div { border-left: 1px solid var(--bg-muted); padding-left: 14px; }
+.hero-metrics span { font-size: 11px; color: var(--ink-4); font-weight: 600; }
+.hero-metrics b { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.hero-metrics small { font-size: 11px; font-weight: 600; }
+
+.dist-card { display: flex; flex-direction: column; }
+.dist-card .card-h { display: flex; align-items: center; }
+.stack-bar { display: flex; height: 24px; border-radius: 6px; overflow: hidden; margin-bottom: 12px; }
+.stack-bar i {
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 10px; font-weight: 700; font-style: normal;
+  min-width: 2px; white-space: nowrap; overflow: hidden;
+}
+.rank-table td, .rank-table th { padding: 7px 8px; }
+.dist-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; vertical-align: 1px; }
+.rank-table .cell-sub { margin-left: 6px; }
+.dist-constraints { border-top: 1px solid var(--bg-muted); margin-top: 10px; padding-top: 10px; display: grid; gap: 6px; }
+.dist-constraints > div { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.dist-constraints span { color: var(--ink-3); }
+.dist-constraints b { font-weight: 700; font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 6px; }
+.dist-more { display: block; margin-top: auto; padding-top: 12px; font-size: 12.5px; font-weight: 700; color: var(--blue); text-align: right; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.pnl-table tfoot td { border-top: 1.5px solid var(--border); border-bottom: none; font-size: 13px; }
+.cell-sub { display: inline-block; font-size: 10.5px; color: var(--ink-4); }
+
+@media (max-width: 1080px) {
+  .hero-grid { grid-template-columns: 1fr; }
+  .hero-metrics { grid-template-columns: repeat(2, 1fr); }
+  .hero-metrics > div + div { border-left: none; padding-left: 4px; }
+}
+
 /* 减少动态：信息照常到达，只跳过旅程（闪色保留，滑动归零） */
 @media (prefers-reduced-motion: reduce) {
   .scope-toggle::before { transition: none !important; }

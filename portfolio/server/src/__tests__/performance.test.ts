@@ -84,6 +84,23 @@ describe("绩效：单位净值与衍生指标", () => {
     expect(m3.pnlDisplay).toBeCloseTo(6000, 2);
     expect(body.kpi.cumulativeReturn).toBeCloseTo(0.05, 6);
     expect(body.kpi.cumulativeInDisplay).toBeCloseTo(20000, 2);
+    // 累计净投入序列：1 月无事件为 0，2 月入金后与 3 月持平
+    expect(m1.investedDisplay).toBeCloseTo(0, 2);
+    expect(m2.investedDisplay).toBeCloseTo(20000, 2);
+    expect(m3.investedDisplay).toBeCloseTo(20000, 2);
+  });
+
+  it("累计净投入基线：首个快照月之前的存量事件计入首月", async () => {
+    const ctx = createTestApp();
+    const { cookie } = await registerAndLogin(ctx);
+    // 快照前的存量入金（基线）
+    await addCapital(ctx, cookie, "cash_in", "2025-11-20", 80000);
+    await uploadStatement(ctx, cookie, { asOf: "2026-01-31", cash: 100000 });
+    await addCapital(ctx, cookie, "cash_in", "2026-02-10", 5000);
+    await uploadStatement(ctx, cookie, { asOf: "2026-02-28", cash: 105000 });
+    const body = await getPerformance(ctx, cookie);
+    expect(body.months[0].investedDisplay).toBeCloseTo(80000, 2);
+    expect(body.months[1].investedDisplay).toBeCloseTo(85000, 2);
   });
 
   it("大额出入金月份返回 warning", async () => {

@@ -200,6 +200,8 @@ export interface PerformanceMonth {
   month: string;
   netAssetsDisplay: number;
   flowDisplay: number;
+  /** 截至该月末的累计外部净投入（含首个快照月之前的存量事件基线） */
+  investedDisplay: number;
   pnlDisplay: number | null;
   nav: number | null;
   cumulativeReturn: number | null;

@@ -7,9 +7,27 @@ import { ValueFlash } from "../components/ValueFlash";
 import { describeCoverageItems } from "../lib/portfolio/coverage";
 import { aggregateSummaryPositions } from "../lib/portfolio/positions";
 import { useGraceSpinner } from "../lib/useGraceSpinner";
-import { BUCKET_LABELS, type BucketBudget, type Currency, type RiskSettings, type Summary } from "../types";
+import {
+  BUCKET_LABELS,
+  type BucketBudget,
+  type Currency,
+  type PerformanceResponse,
+  type RiskSettings,
+  type Summary,
+} from "../types";
 
 const CCY_SIGN: Record<Currency, string> = { USD: "$", HKD: "HK$", CNY: "¥" };
+const INK = "#0f172a";
+/** 三仓分布配色（沿用原饼图口径） */
+const BUCKET_COLORS: Record<string, string> = {
+  进取仓: "#f97316", 防守仓: "#3b82f6", 稳健仓: "#22c55e", 授予仓: "#a855f7", 未分类: "#94a3b8",
+};
+type RangeKey = "6m" | "1y" | "all";
+const RANGE_LABELS: Array<{ key: RangeKey; label: string; months: number | null }> = [
+  { key: "6m", label: "6月", months: 6 },
+  { key: "1y", label: "1年", months: 12 },
+  { key: "all", label: "全部", months: null },
+];
 
 function ratioText(value: number | null | undefined) {
   return value == null ? "—" : `${(value * 100).toFixed(1)}%`;
@@ -20,6 +38,41 @@ function pnlText(sign: string, value: number | null | undefined) {
   return `${value >= 0 ? "+" : "-"}${sign}${fmtMoney(Math.abs(value), 0)}`;
 }
 
+/** 占总资产百分比列（两位小数，带符号） */
+function pctOfText(value: number | null | undefined, base: number) {
+  if (value == null || !(base > 0)) return "—";
+  const pct = (value / base) * 100;
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
+type Status = "充足" | "正常" | "超限" | "待设置";
+const STATUS_COLOR: Record<Status, string> = { 充足: "var(--gain)", 正常: "var(--brand)", 超限: "var(--loss)", 待设置: "var(--ink-4)" };
+
+function StatusCell({ status }: { status: Status }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", fontWeight: 600, fontSize: 12 }}>
+      <span className="status-dot" style={{ background: STATUS_COLOR[status] }} />
+      {status}
+    </span>
+  );
+}
+
+/** 下限类约束（越高越好）：高出下限 5pp 为充足 */
+function floorStatus(current: number | null, floor: number): Status {
+  if (current == null) return "待设置";
+  if (current >= floor + 0.05) return "充足";
+  if (current >= floor) return "正常";
+  return "超限";
+}
+
+/** 上限类约束（越低越好）：低于上限 5pp 为充足 */
+function ceilStatus(current: number | null, ceil: number): Status {
+  if (current == null) return "待设置";
+  if (current <= ceil - 0.05) return "充足";
+  if (current <= ceil) return "正常";
+  return "超限";
+}
+
 function currentQuarter() {
   const now = new Date();
   return `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
@@ -28,6 +81,7 @@ function currentQuarter() {
 export default function DashboardPage() {
   const [display, setDisplay] = useState<Currency>("USD");
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [perf, setPerf] = useState<PerformanceResponse | null>(null);
   const [risk, setRisk] = useState<RiskSettings>({ symbolLimit: 0.5, bucketLimit: 0.5, cashFloor: 0.3 });
   const [budgets, setBudgets] = useState<BucketBudget[]>([]);
   const [busy, setBusy] = useState(true);
@@ -35,17 +89,21 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   // 分层视图：总览默认看全部资产（含授予仓），可切到自主组合
   const [scope, setScope] = useState<"all" | "self">("all");
+  const [range, setRange] = useState<RangeKey>("all");
+  const [distTab, setDistTab] = useState<"symbol" | "bucket">("symbol");
 
   const load = useCallback(async (refresh = false) => {
     refresh ? setRefreshing(true) : setBusy(true);
     setError("");
     try {
-      const [nextSummary, nextRisk, nextBudgets] = await Promise.all([
+      const [nextSummary, nextPerf, nextRisk, nextBudgets] = await Promise.all([
         api.get<Summary>(`/api/portfolio/summary?display=${display}${scope === "self" ? "&scope=self" : ""}${refresh ? "&refresh=1" : ""}`),
+        api.get<PerformanceResponse>(`/api/portfolio/performance?display=${display}&scope=${scope}`),
         api.get<RiskSettings>("/api/risk-settings"),
         api.get<{ quarter: string; budgets: BucketBudget[] }>(`/api/bucket-budgets?quarter=${currentQuarter()}`),
       ]);
       setSummary(nextSummary);
+      setPerf(nextPerf);
       setRisk(nextRisk);
       setBudgets(nextBudgets.budgets);
     } catch (err) {
@@ -71,6 +129,7 @@ export default function DashboardPage() {
     externalNetInvested: null,
   };
   const pnl = summary?.pnl;
+  const totalAssets = summary?.kpi.totalAssets ?? 0;
   const cashRatio = summary?.kpi.totalAssets ? summary.kpi.idleCash / summary.kpi.totalAssets : 0;
   const topSymbol = useMemo(() => {
     if (instrumentPositions.length === 0) return null;
@@ -82,92 +141,109 @@ export default function DashboardPage() {
     const bucket = [...summary.allocation.byBucket].sort((a, b) => b.value - a.value)[0];
     return { ...bucket, ratio: bucket.value / total };
   }, [summary]);
+  // 累计总盈亏（经济盈亏口径 = 净资产 − 外部净投入），占净投入比例
+  const totalPnl = pnl?.economicTotal ?? pnl?.explainedTotal ?? null;
+  const totalPnlRatio =
+    totalPnl != null && costs.externalNetInvested != null && costs.externalNetInvested > 0
+      ? totalPnl / costs.externalNetInvested
+      : null;
+  // 数据截至：最新快照日期 + 各券商明细
+  const latestAsOf = summary?.asOf.length ? [...summary.asOf.map((item) => item.asOf)].sort().at(-1) : null;
 
-  const pieTooltip = useMemo(() => ({
-    ...LIGHT_TOOLTIP,
-    formatter: (point: any) => `<b>${point.name}</b><br/>${sign}${fmtMoney(point.value)}<br/>占比：${point.percent}%`,
-  }), [sign]);
+  /** Hero 双线图：总净资产（墨色实线带月点）vs 累计外部净投入（灰色虚线）——两线间距即累计盈亏 */
+  const heroMonths = useMemo(() => {
+    const months = perf?.months ?? [];
+    const limit = RANGE_LABELS.find((r) => r.key === range)?.months ?? null;
+    return limit == null ? months : months.slice(-limit);
+  }, [perf, range]);
 
-  const donutOption = useMemo<EChartsOption>(() => {
-    if (!summary) return {};
+  const heroOption = useMemo<EChartsOption>(() => {
+    if (!heroMonths.length) return {};
     return {
-      tooltip: pieTooltip,
-      legend: { bottom: 0, textStyle: { color: "#64748b", fontSize: 11 }, itemWidth: 10, itemHeight: 10 },
-      series: [{
-        type: "pie",
-        radius: ["52%", "74%"],
-        center: ["50%", "45%"],
-        label: {
-          show: true,
-          position: "center",
-          formatter: `{total|${sign}${fmtMoney(summary.kpi.totalAssets, 0)}}\n{unit|总净资产 (${display})}`,
-          rich: {
-            total: { fontSize: 20, fontWeight: 800, color: "#0f172a", lineHeight: 26 },
-            unit: { fontSize: 10, color: "#94a3b8", lineHeight: 16 },
-          },
+      tooltip: {
+        ...LIGHT_TOOLTIP,
+        trigger: "axis",
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          const month = items[0]?.axisValue ?? "";
+          const point = heroMonths.find((m) => m.month === month);
+          if (!point) return month;
+          const gap = point.netAssetsDisplay - point.investedDisplay;
+          return [
+            `<b>${month}</b>${point.carried ? "（缺月结转）" : ""}`,
+            `总净资产：${sign}${fmtMoney(point.netAssetsDisplay, 0)}`,
+            `外部净投入：${sign}${fmtMoney(point.investedDisplay, 0)}`,
+            `累计盈亏（两线间距）：<b style="color:${gap >= 0 ? GAIN : LOSS}">${gap >= 0 ? "+" : "-"}${sign}${fmtMoney(Math.abs(gap), 0)}</b>`,
+          ].join("<br/>");
         },
-        labelLine: { show: false },
-        itemStyle: { borderRadius: 5, borderColor: "#fff", borderWidth: 1.5 },
-        data: [
-          { ...summary.allocation.positionVsCash[0], itemStyle: { color: "#eab308" } },
-          { ...summary.allocation.positionVsCash[1], itemStyle: { color: "#3b82f6" } },
-        ],
-      }],
-    };
-  }, [summary, pieTooltip, display, sign]);
-
-  const sidePie = useCallback((data: Array<{ name: string; value: number }>, colors: Record<string, string> = {}): EChartsOption => ({
-    tooltip: pieTooltip,
-    legend: { orient: "vertical", right: 4, top: "middle", textStyle: { color: "#64748b", fontSize: 11 }, itemWidth: 10, itemHeight: 10 },
-    series: [{
-      type: "pie",
-      radius: ["46%", "72%"],
-      center: ["36%", "50%"],
-      label: { show: false },
-      itemStyle: { borderRadius: 4, borderColor: "#fff", borderWidth: 1.5 },
-      data: data.map((item, index) => ({ ...item, itemStyle: { color: colors[item.name] ?? PALETTE[index % PALETTE.length] } })),
-    }],
-  }), [pieTooltip]);
-
-  const symbolPieOption = useMemo(() => {
-    if (!summary) return {};
-    const top = summary.allocation.bySymbol.slice(0, 7);
-    const rest = summary.allocation.bySymbol.slice(7).reduce((sum, item) => sum + item.value, 0);
-    return sidePie(rest > 0 ? [...top, { name: "其他", value: rest }] : top);
-  }, [summary, sidePie]);
-
-  const bucketPieOption = useMemo(() => sidePie(summary?.allocation.byBucket ?? [], {
-    进取仓: "#f97316", 防守仓: "#3b82f6", 稳健仓: "#22c55e", 授予仓: "#a855f7", 未分类: "#94a3b8",
-  }), [summary, sidePie]);
-
-  const historyOption = useMemo<EChartsOption>(() => {
-    if (!summary) return {};
-    return {
-      tooltip: { ...LIGHT_TOOLTIP, trigger: "axis", valueFormatter: (value: unknown) => (typeof value === "number" ? `${sign}${fmtMoney(value, 0)}` : "—") },
+      },
       legend: { top: 0, textStyle: { color: "#64748b", fontSize: 11 } },
-      grid: { left: 10, right: 10, top: 34, bottom: 8, containLabel: true },
-      xAxis: { type: "category", data: summary.history.map((point) => point.month), axisLabel: { color: "#64748b", fontSize: 10 }, axisLine: { lineStyle: { color: "#e2e8f0" } }, axisTick: { show: false } },
-      yAxis: { type: "value", axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (value: number) => fmtCompact(value) }, splitLine: { lineStyle: { color: HAIRLINE } } },
+      grid: { left: 10, right: 14, top: 34, bottom: 8, containLabel: true },
+      xAxis: {
+        type: "category",
+        data: heroMonths.map((m) => m.month),
+        axisLabel: { color: "#64748b", fontSize: 10 },
+        axisLine: { lineStyle: { color: "#e2e8f0" } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: "value",
+        scale: true,
+        axisLabel: { color: "#94a3b8", fontSize: 10, formatter: (v: number) => fmtCompact(v) },
+        splitLine: { lineStyle: { color: HAIRLINE } },
+      },
       series: [
         {
-          name: "盈亏",
-          type: "bar",
-          barWidth: 22,
-          data: summary.history.map((point) => point.gainLossDisplay == null ? null : ({
-            value: point.gainLossDisplay,
-            itemStyle: {
-              color: point.gainLossDisplay >= 0 ? GAIN : LOSS,
-              borderRadius: point.gainLossDisplay >= 0 ? [4, 4, 0, 0] : [0, 0, 4, 4],
-            },
-          })),
+          name: "总净资产",
+          type: "line",
+          data: heroMonths.map((m) => m.netAssetsDisplay),
+          lineStyle: { color: INK, width: 2 },
+          itemStyle: { color: INK },
+          symbol: (_: unknown, params: any) => (heroMonths[params.dataIndex]?.carried ? "emptyCircle" : "circle"),
+          symbolSize: (_: unknown, params: any) => (heroMonths[params.dataIndex]?.carried ? 7 : 4),
         },
-        { name: "账面成本", type: "line", data: summary.history.map((point) => point.costDisplay), lineStyle: { color: "#8b5cf6", width: 2, type: "dashed" }, itemStyle: { color: "#8b5cf6" } },
-        { name: "市值", type: "line", data: summary.history.map((point) => point.valueDisplay), lineStyle: { color: "#eab308", width: 2 }, itemStyle: { color: "#eab308" } },
+        {
+          name: "外部净投入",
+          type: "line",
+          data: heroMonths.map((m) => m.investedDisplay),
+          lineStyle: { color: "#94a3b8", width: 1.5, type: "dashed" },
+          itemStyle: { color: "#94a3b8" },
+          symbol: "none",
+        },
       ],
     };
-  }, [summary]);
+  }, [heroMonths, sign]);
 
-  // 首载才整页等待（带 220ms 宽限，快请求不闪 spinner）；已有数据时切 scope/币种不清空旧内容
+  /** 持仓分布：按标的 Top5+其他 / 按三仓 */
+  const distRows = useMemo(() => {
+    const positionsValue = summary?.kpi.positionsValue ?? 0;
+    if (positionsValue <= 0) return [];
+    if (distTab === "symbol") {
+      const sorted = [...instrumentPositions].sort((a, b) => b.valueDisplay - a.valueDisplay);
+      const top = sorted.slice(0, 5).map((p, i) => ({
+        key: p.symbol,
+        label: p.symbol,
+        sub: p.name !== p.symbol ? p.name : "",
+        value: p.valueDisplay,
+        ratio: p.valueDisplay / positionsValue,
+        color: PALETTE[i % PALETTE.length],
+      }));
+      const rest = sorted.slice(5).reduce((sum, p) => sum + p.valueDisplay, 0);
+      return rest > 0
+        ? [...top, { key: "__rest", label: "其他", sub: `${sorted.length - 5} 个标的`, value: rest, ratio: rest / positionsValue, color: "#cbd5e1" }]
+        : top;
+    }
+    return (summary?.allocation.byBucket ?? []).map((item) => ({
+      key: item.name,
+      label: item.name,
+      sub: "",
+      value: item.value,
+      ratio: item.value / positionsValue,
+      color: BUCKET_COLORS[item.name] ?? "#94a3b8",
+    }));
+  }, [summary, instrumentPositions, distTab]);
+
+  // 首载才整页等待（220ms 宽限）；切 scope/币种不清空旧内容
   const firstLoading = busy && !summary;
   const showSpinner = useGraceSpinner(firstLoading);
   if (firstLoading) return showSpinner ? <div className="empty"><span className="spin dark" /></div> : null;
@@ -177,7 +253,11 @@ export default function DashboardPage() {
       <div className="page-heading-row">
         <div>
           <h1 className="page-title">资产总览</h1>
-          <p className="page-desc">{summary?.asOf.length ? `数据基准：${summary.asOf.map((item) => `${item.broker} @ ${item.asOf}`).join(" · ")}` : "录入持仓与资本事件后开始盘点"}</p>
+          <p className="page-desc">
+            {latestAsOf
+              ? <>数据截至 <b>{latestAsOf}</b><span style={{ color: "var(--ink-4)" }}> · {summary?.asOf.map((item) => `${item.broker} @ ${item.asOf}`).join(" · ")}</span></>
+              : "录入持仓与资本事件后开始盘点"}
+          </p>
         </div>
         <div className="heading-actions">
           {/* 页面专属按钮在左，共享控件（切换器+币种）贴右与其他页对齐，切页不横跳 */}
@@ -213,48 +293,138 @@ export default function DashboardPage() {
         <div className="card empty"><div>还没有资产数据。</div><Link to="/data" className="btn empty-action">去数据管理</Link></div>
       ) : summary && (
         <>
-          <section className="summary-primary-grid" aria-label="资产与成本核心指标">
-            <div className="kpi"><div className="k">总净资产</div><div className="v"><ValueFlash value={summary.kpi.totalAssets}>{sign}{fmtMoney(summary.kpi.totalAssets, 0)}</ValueFlash><span className="unit">{display}</span></div></div>
-            <div className="kpi ok"><div className="k">持仓市值</div><div className="v"><ValueFlash value={summary.kpi.positionsValue}>{sign}{fmtMoney(summary.kpi.positionsValue, 0)}</ValueFlash></div><div className="sub">{instrumentPositions.length} 个标的</div></div>
-            <div className="kpi violet"><div className="k">账面成本</div><div className="v">{costs.bookCost == null ? "—" : `${sign}${fmtMoney(costs.bookCost, 0)}`}</div><div className="sub">当前剩余股份</div></div>
-            <div className="kpi blue"><div className="k">外部净投入</div><div className="v">{costs.externalNetInvested == null ? "待初始化" : `${sign}${fmtMoney(costs.externalNetInvested, 0)}`}</div><div className="sub">仅外部资本事件</div></div>
-            <div className="kpi accent"><div className="k">现金 / 安全线</div><div className="v">{sign}{fmtMoney(summary.kpi.idleCash, 0)}</div><div className={`sub ${cashRatio >= risk.cashFloor ? "pos" : "neg"}`}>{ratioText(cashRatio)} / 至少 {ratioText(risk.cashFloor)}</div></div>
-          </section>
-
-          <div className="grid grid-2 decision-grid">
-            <section className="card" aria-labelledby="pnl-title">
-              <div className="card-h" id="pnl-title">累计总盈亏<span className="tag">{summary.coverage?.status === "complete" ? "完整口径" : "已知部分"}</span></div>
-              <div className="pnl-total"><span>解释盈亏</span><b className={(pnl?.explainedTotal ?? summary.kpi.gainLoss) >= 0 ? "pos" : "neg"}>{pnlText(sign, pnl?.explainedTotal ?? summary.kpi.gainLoss)}</b></div>
-              <div className="pnl-breakdown">
-                <div><span>已实现资本利得</span><b>{pnlText(sign, pnl?.realizedCapitalGain)}</b></div>
-                <div><span>未实现资本利得</span><b>{pnlText(sign, pnl?.unrealizedCapitalGain)}</b></div>
-                <div><span>净股息</span><b>{pnlText(sign, pnl?.dividendsNet)}</b></div>
-                <div><span>交易费用</span><b className="neg">{pnl?.tradingFees == null ? "—" : `-${sign}${fmtMoney(Math.abs(pnl.tradingFees), 0)}`}</b></div>
-                <div><span>融资费用</span><b className="neg">{pnl?.financingFees == null ? "—" : `-${sign}${fmtMoney(Math.abs(pnl.financingFees), 0)}`}</b></div>
+          <div className="hero-grid">
+            {/* Hero：资产走势（浅色 B 案）——两线间距即累计盈亏 */}
+            <section className="card hero-card" aria-label="资产走势">
+              <div className="hero-head">
+                <div className="hero-nums">
+                  <div className="hero-num main">
+                    <div className="k">总净资产（{display}）</div>
+                    <div className="v"><ValueFlash value={summary.kpi.totalAssets}>{sign}{fmtMoney(summary.kpi.totalAssets, 0)}</ValueFlash></div>
+                  </div>
+                  <div className="hero-num">
+                    <div className="k">累计总盈亏 <span title="经济盈亏 = 净资产 − 外部净投入；月度快照口径" style={{ cursor: "help", color: "var(--ink-4)" }}>ⓘ</span></div>
+                    <div className={`v ${totalPnl != null && totalPnl < 0 ? "neg" : "pos"}`} style={{ fontSize: 20 }}>
+                      {pnlText(sign, totalPnl)}{totalPnlRatio != null && <span style={{ fontSize: 13, marginLeft: 6 }}>· {totalPnlRatio >= 0 ? "+" : ""}{(totalPnlRatio * 100).toFixed(2)}%</span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="scope-toggle" role="tablist" aria-label="走势时间范围">
+                  {RANGE_LABELS.map((r) => (
+                    <button key={r.key} role="tab" aria-selected={range === r.key} className={range === r.key ? "active" : ""} onClick={() => setRange(r.key)}>{r.label}</button>
+                  ))}
+                </div>
               </div>
-              <div className="reconcile-row"><span>经济盈亏（净资产 − 外部净投入）</span><b>{pnlText(sign, pnl?.economicTotal)}</b></div>
-              <div className="reconcile-row"><span>未解释差额</span><b>{pnlText(sign, pnl?.unexplained)}</b></div>
+              {heroMonths.length >= 2 ? (
+                <Chart option={heroOption} height={280} />
+              ) : (
+                <div className="empty" style={{ height: 280 }}>
+                  {heroMonths.length === 1
+                    ? `暂只有 ${heroMonths[0].month} 一期快照，补传历史月结单后即可成线`
+                    : "上传月结单后显示资产走势"}
+                </div>
+              )}
+              <div className="hero-metrics">
+                <div><span>持仓市值</span><b>{sign}{fmtMoney(summary.kpi.positionsValue, 0)}</b><small className={summary.kpi.gainLossRatio == null ? "" : summary.kpi.gainLossRatio >= 0 ? "pos" : "neg"}>{summary.kpi.gainLossRatio == null ? "" : `${summary.kpi.gainLossRatio >= 0 ? "+" : ""}${(summary.kpi.gainLossRatio * 100).toFixed(2)}%`}</small></div>
+                <div><span>账面成本</span><b>{costs.bookCost == null ? "—" : `${sign}${fmtMoney(costs.bookCost, 0)}`}</b></div>
+                <div><span>外部净投入</span><b>{costs.externalNetInvested == null ? "待初始化" : `${sign}${fmtMoney(costs.externalNetInvested, 0)}`}</b></div>
+                <div><span>现金</span><b>{sign}{fmtMoney(summary.kpi.idleCash, 0)}</b><small className={cashRatio >= risk.cashFloor ? "pos" : "neg"}>{ratioText(cashRatio)}</small></div>
+              </div>
             </section>
 
-            <section className="card" aria-labelledby="risk-title">
-              <div className="card-h" id="risk-title">资金安全边界<span className="tag">持仓内集中度</span></div>
-              <div className="constraint-list">
-                <div className="constraint-row"><div><span>现金率</span><b>{ratioText(cashRatio)}</b></div><progress max={1} value={Math.min(cashRatio / Math.max(risk.cashFloor, 0.001), 1)} /><small>下限 {ratioText(risk.cashFloor)}</small></div>
-                <div className="constraint-row"><div><span>最高标的 · {topSymbol?.symbol ?? "—"}</span><b>{ratioText(topSymbol?.holdingRatio)}</b></div><progress max={1} value={Math.min((topSymbol?.holdingRatio ?? 0) / Math.max(risk.symbolLimit, 0.001), 1)} /><small>上限 {ratioText(risk.symbolLimit)}</small></div>
-                <div className="constraint-row"><div><span>最高仓 · {topBucket?.name ?? "—"}</span><b>{ratioText(topBucket?.ratio)}</b></div><progress max={1} value={Math.min((topBucket?.ratio ?? 0) / Math.max(risk.bucketLimit, 0.001), 1)} /><small>上限 {ratioText(risk.bucketLimit)}</small></div>
+            {/* 持仓分布：堆叠条 + Top5 表 + 关键约束 */}
+            <section className="card dist-card" aria-label="持仓分布">
+              <div className="card-h">持仓分布
+                <span className="scope-toggle" role="tablist" aria-label="分布口径" style={{ marginLeft: "auto" }}>
+                  <button role="tab" aria-selected={distTab === "symbol"} className={distTab === "symbol" ? "active" : ""} onClick={() => setDistTab("symbol")}>按标的</button>
+                  <button role="tab" aria-selected={distTab === "bucket"} className={distTab === "bucket" ? "active" : ""} onClick={() => setDistTab("bucket")}>按三仓</button>
+                </span>
               </div>
-              <div className="budget-strip">{budgets.length === 0 ? <span>尚未设置本季度仓预算</span> : budgets.map((budget) => <div key={budget.bucket}><span>{BUCKET_LABELS[budget.bucket] ?? budget.bucket}</span><b>{budget.availableUsd == null ? "待设置" : `$${fmtMoney(budget.availableUsd, 0)} 可用`}</b></div>)}</div>
-              <Link className="btn ghost full-width" to="/plans">计算指定标的安全金额</Link>
+              <div className="stack-bar" aria-hidden>
+                {distRows.map((row) => (
+                  <i key={row.key} style={{ width: `${Math.max(row.ratio * 100, 1)}%`, background: row.color }} title={`${row.label} ${ratioText(row.ratio)}`}>
+                    {row.ratio >= 0.08 ? ratioText(row.ratio) : ""}
+                  </i>
+                ))}
+              </div>
+              <table className="table rank-table">
+                <thead><tr><th>#</th><th>{distTab === "symbol" ? "标的 / 名称" : "仓别"}</th><th className="num">市值（{display}）</th><th className="num">占比</th></tr></thead>
+                <tbody>
+                  {distRows.map((row, index) => (
+                    <tr key={row.key}>
+                      <td style={{ color: "var(--ink-4)" }}>{index + 1}</td>
+                      <td><span className="dist-swatch" style={{ background: row.color }} /><b>{row.label}</b>{row.sub && <span className="cell-sub">{row.sub}</span>}</td>
+                      <td className="num">{fmtMoney(row.value, 0)}</td>
+                      <td className="num">{ratioText(row.ratio)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="dist-constraints">
+                <div><span>现金率</span><b><StatusCell status={floorStatus(cashRatio, risk.cashFloor)} /> {ratioText(cashRatio)} / 下限 {ratioText(risk.cashFloor)}</b></div>
+                <div><span>最高标的 · {topSymbol?.symbol ?? "—"}</span><b><StatusCell status={ceilStatus(topSymbol?.holdingRatio ?? null, risk.symbolLimit)} /> {ratioText(topSymbol?.holdingRatio)} / 上限 {ratioText(risk.symbolLimit)}</b></div>
+                <div><span>标的数量</span><b>{instrumentPositions.length}</b></div>
+              </div>
+              <Link className="dist-more" to="/holdings">查看全部持仓 →</Link>
             </section>
           </div>
 
-          <section className="grid grid-3 charts-secondary" aria-label="辅助分布图表">
-            <div className="card"><div className="card-h">仓位与现金<span className="tag">辅助观察</span></div><Chart option={donutOption} height={250} /></div>
-            <div className="card"><div className="card-h">标的分布<span className="tag">Top 7 + 其他</span></div><Chart option={symbolPieOption} height={250} /></div>
-            <div className="card"><div className="card-h">三仓分布<span className="tag">辅助观察</span></div><Chart option={bucketPieOption} height={250} /></div>
-          </section>
+          <div className="grid grid-2 decision-grid">
+            {/* 盈亏拆解：金额 + 占总资产% + 合计行 */}
+            <section className="card" aria-labelledby="pnl-title">
+              <div className="card-h" id="pnl-title">盈亏拆解<span className="tag">{summary.coverage?.status === "complete" ? "完整口径" : "已知部分"}</span></div>
+              <table className="table pnl-table">
+                <thead><tr><th>项目</th><th className="num">金额（{display}）</th><th className="num">占总资产</th></tr></thead>
+                <tbody>
+                  <tr><td>已实现资本利得</td><td className={`num ${(pnl?.realizedCapitalGain ?? 0) >= 0 ? "pos" : "neg"}`}>{pnlText(sign, pnl?.realizedCapitalGain)}</td><td className="num">{pctOfText(pnl?.realizedCapitalGain, totalAssets)}</td></tr>
+                  <tr><td>未实现资本利得</td><td className={`num ${(pnl?.unrealizedCapitalGain ?? 0) >= 0 ? "pos" : "neg"}`}>{pnlText(sign, pnl?.unrealizedCapitalGain)}</td><td className="num">{pctOfText(pnl?.unrealizedCapitalGain, totalAssets)}</td></tr>
+                  <tr><td>净股息</td><td className="num pos">{pnlText(sign, pnl?.dividendsNet)}</td><td className="num">{pctOfText(pnl?.dividendsNet, totalAssets)}</td></tr>
+                  <tr><td>交易费用</td><td className="num neg">{pnl?.tradingFees == null ? "—" : `-${sign}${fmtMoney(Math.abs(pnl.tradingFees), 0)}`}</td><td className="num">{pnl?.tradingFees == null ? "—" : pctOfText(-Math.abs(pnl.tradingFees), totalAssets)}</td></tr>
+                  <tr><td>融资费用</td><td className="num neg">{pnl?.financingFees == null ? "—" : `-${sign}${fmtMoney(Math.abs(pnl.financingFees), 0)}`}</td><td className="num">{pnl?.financingFees == null ? "—" : pctOfText(-Math.abs(pnl.financingFees), totalAssets)}</td></tr>
+                  <tr><td>经济盈亏（净资产 − 外部净投入）</td><td className={`num ${(pnl?.economicTotal ?? 0) >= 0 ? "pos" : "neg"}`}>{pnlText(sign, pnl?.economicTotal)}</td><td className="num">{pctOfText(pnl?.economicTotal, totalAssets)}</td></tr>
+                  <tr><td>未解释差额</td><td className="num">{pnlText(sign, pnl?.unexplained)}</td><td className="num">{pctOfText(pnl?.unexplained, totalAssets)}</td></tr>
+                </tbody>
+                <tfoot>
+                  <tr className="pnl-total-row"><td>累计总盈亏</td><td className={`num ${(totalPnl ?? 0) >= 0 ? "pos" : "neg"}`}><b>{pnlText(sign, totalPnl)}</b></td><td className="num"><b>{pctOfText(totalPnl, totalAssets)}</b></td></tr>
+                </tfoot>
+              </table>
+            </section>
 
-          <section className="card section-card"><div className="card-h">资产与账面成本历史<span className="tag">历史口径随数据覆盖变化</span></div>{summary.history.length ? <Chart option={historyOption} height={300} /> : <div className="empty">上传不同月份月结单后显示历史</div>}</section>
+            {/* 资金安全边界：约束表 + 分仓预算表 */}
+            <section className="card" aria-labelledby="risk-title">
+              <div className="card-h" id="risk-title">资金安全边界<span className="tag">当前值 vs 阈值</span></div>
+              <table className="table">
+                <thead><tr><th>约束项</th><th className="num">当前值</th><th className="num">阈值 / 规则</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr><td>现金率（现金 / 总资产）</td><td className="num">{ratioText(cashRatio)}</td><td className="num">下限 {ratioText(risk.cashFloor)}</td><td><StatusCell status={floorStatus(cashRatio, risk.cashFloor)} /></td></tr>
+                  <tr><td>最高标的集中度 · {topSymbol?.symbol ?? "—"}</td><td className="num">{ratioText(topSymbol?.holdingRatio)}</td><td className="num">上限 {ratioText(risk.symbolLimit)}</td><td><StatusCell status={ceilStatus(topSymbol?.holdingRatio ?? null, risk.symbolLimit)} /></td></tr>
+                  <tr><td>最高仓集中度 · {topBucket?.name ?? "—"}</td><td className="num">{ratioText(topBucket?.ratio)}</td><td className="num">上限 {ratioText(risk.bucketLimit)}</td><td><StatusCell status={ceilStatus(topBucket?.ratio ?? null, risk.bucketLimit)} /></td></tr>
+                </tbody>
+              </table>
+              <div className="card-h" style={{ marginTop: 14 }}>分仓预算使用<span className="tag">{currentQuarter()}</span></div>
+              <table className="table">
+                <thead><tr><th>仓别</th><th className="num">预算（USD）</th><th className="num">已用</th><th className="num">剩余</th><th>状态</th></tr></thead>
+                <tbody>
+                  {(["aggressive", "defensive", "stable"] as const).map((bucket) => {
+                    const item = budgets.find((budget) => budget.bucket === bucket);
+                    const status: Status = item?.availableUsd == null || item.limitUsd == null
+                      ? "待设置"
+                      : item.availableUsd / item.limitUsd > 0.2 ? "充足" : item.availableUsd > 0 ? "正常" : "超限";
+                    return (
+                      <tr key={bucket}>
+                        <td>{BUCKET_LABELS[bucket]}</td>
+                        <td className="num">{item?.limitUsd == null ? "—" : fmtMoney(item.limitUsd, 0)}</td>
+                        <td className="num">{item ? fmtMoney(item.usedUsd, 0) : "—"}</td>
+                        <td className="num">{item?.availableUsd == null ? "—" : fmtMoney(item.availableUsd, 0)}</td>
+                        <td><StatusCell status={status} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <Link className="btn ghost full-width" to="/plans">计算指定标的安全金额</Link>
+            </section>
+          </div>
         </>
       )}
     </div>
