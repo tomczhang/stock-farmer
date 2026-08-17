@@ -255,11 +255,11 @@ button { font-family: inherit; }
 .spin.dark { border-color: var(--border); border-top-color: var(--brand); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 入场：0.22s 位移+缩放+模糊（出场如需实现必须短于入场） */
+/* 页面入场：只做轻微上浮+淡入；缩放/模糊留给小面积弹层，整页缩放会晞眼 */
 .fade-in { animation: fadeIn 0.22s var(--ease-enter) both; }
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px) scale(0.97); filter: blur(6px); }
-  to { opacity: 1; transform: none; filter: blur(0); }
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ---------- 资本控制中心 ---------- */
