@@ -180,16 +180,17 @@ export default function DashboardPage() {
           <p className="page-desc">{summary?.asOf.length ? `数据基准：${summary.asOf.map((item) => `${item.broker} @ ${item.asOf}`).join(" · ")}` : "录入持仓与资本事件后开始盘点"}</p>
         </div>
         <div className="heading-actions">
-          <div className="scope-toggle" role="tablist" aria-label="总览视图范围">
-            <button role="tab" aria-selected={scope === "all"} className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全部资产</button>
-            <button role="tab" aria-selected={scope === "self"} className={scope === "self" ? "active" : ""} onClick={() => setScope("self")}>自主组合</button>
-          </div>
-          <label className="sr-only" htmlFor="dashboard-currency">展示币种</label>
-          <select id="dashboard-currency" className="select currency-select" value={display} onChange={(event) => setDisplay(event.target.value as Currency)}><option value="USD">USD 计价</option><option value="HKD">HKD 计价</option><option value="CNY">CNY 计价</option></select>
+          {/* 页面专属按钮在左，共享控件（切换器+币种）贴右与其他页对齐，切页不横跳 */}
           <button className="btn ghost btn-twin" disabled={refreshing || !hasData} onClick={() => load(true)}>
             <span className="twin" aria-hidden>刷新市值</span>
             <span className="face">{refreshing ? <span className="spin dark" /> : "刷新市值"}</span>
           </button>
+          <div className="scope-toggle" role="tablist" aria-label="总览视图范围">
+            <button role="tab" aria-selected={scope === "self"} className={scope === "self" ? "active" : ""} onClick={() => setScope("self")}>自主组合</button>
+            <button role="tab" aria-selected={scope === "all"} className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全部资产</button>
+          </div>
+          <label className="sr-only" htmlFor="dashboard-currency">展示币种</label>
+          <select id="dashboard-currency" className="select currency-select" value={display} onChange={(event) => setDisplay(event.target.value as Currency)}><option value="USD">USD 计价</option><option value="HKD">HKD 计价</option><option value="CNY">CNY 计价</option></select>
         </div>
       </div>
 

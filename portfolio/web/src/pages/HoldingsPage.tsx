@@ -126,11 +126,12 @@ export default function HoldingsPage() {
           <p className="page-desc">按市场与标的聚合仓位、账面成本和盈亏；券商明细可展开核对。</p>
         </div>
         <div className="heading-actions">
+          {/* 页面专属按钮在左，共享控件贴右与其他页对齐 */}
+          <Link className="btn ghost" to="/data">补录数据</Link>
           <div className="scope-toggle" role="tablist" aria-label="持仓视图范围">
             <button role="tab" aria-selected={scope === "self"} className={scope === "self" ? "active" : ""} onClick={() => setScope("self")}>自主组合</button>
             <button role="tab" aria-selected={scope === "all"} className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全部资产</button>
           </div>
-          <Link className="btn ghost" to="/data">补录数据</Link>
         </div>
       </div>
 
