@@ -32,7 +32,11 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
+/* 预留滚动条槽位：页面长短不同时滚动条出现/消失不再挤动内容宽度（切菜单横向抖动的根源） */
+html { scroll-behavior: smooth; overflow-y: scroll; }
+@supports (scrollbar-gutter: stable) {
+  html { overflow-y: auto; scrollbar-gutter: stable; }
+}
 body {
   font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
   color: var(--ink);
