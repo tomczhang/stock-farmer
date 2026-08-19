@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UI 方案对比 · 现状 vs LEDGER 规范</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Source Han Sans SC", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: #eceef0; color: #1B1D1F; font-size: 14px; line-height: 1.6;
+    padding: 32px 24px 80px;
+  }
+  .page-head { max-width: 1440px; margin: 0 auto 28px; }
+  .page-head h1 { font-size: 26px; font-weight: 800; letter-spacing: .5px; }
+  .page-head p { color: #596068; margin-top: 4px; font-size: 13px; }
+  .board { max-width: 1440px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .board.single { grid-template-columns: 1fr; }
+  .col-title {
+    font-size: 15px; font-weight: 800; padding: 10px 14px; border-radius: 8px 8px 0 0;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .col-title small { font-weight: 500; font-size: 12px; opacity: .75; }
+  .cur .col-title { background: #334155; color: #fff; }
+  .led .col-title { background: #1B1D1F; color: #E3B319; }
+  .panel { padding: 20px; border-radius: 0 0 10px 10px; min-height: 100%; }
+  /* 左：现状环境 */
+  .cur .panel { background: #f8fafc; border: 1px solid #e2e8f0; border-top: none; }
+  /* 右：LEDGER 环境 */
+  .led .panel { background: #F4F5F3; border: 1px solid #D8DCDF; border-top: none; }
+  .sec-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; color: #7A828C; margin: 26px 0 10px; text-transform: uppercase; }
+  .sec-label:first-child { margin-top: 0; }
+
+  /* ---- 色板 ---- */
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+  .sw { width: 92px; }
+  .sw i { display: block; height: 44px; border-radius: 6px; border: 1px solid rgba(0,0,0,.08); }
+  .sw b { display: block; font-size: 11px; margin-top: 4px; }
+  .sw span { font-size: 10px; color: #7A828C; font-family: ui-monospace, Menlo, monospace; }
+
+  /* ---- KPI 卡 ---- */
+  .kpi-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 12px; }
+  .cur .kpi {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px;
+    box-shadow: 0 8px 28px rgba(15, 23, 42, 0.06);
+  }
+  .cur .kpi .k { font-size: 12px; color: #64748b; }
+  .cur .kpi .v { font-size: 21px; font-weight: 800; color: #0f172a; margin-top: 2px; }
+  .cur .kpi .sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+  .cur .kpi.ok { border-top: 3px solid #22c55e; }
+  .cur .kpi.violet { border-top: 3px solid #8b5cf6; }
+  .led .kpi {
+    background: #fff; border: 1px solid #D8DCDF; border-radius: 10px; padding: 14px 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .led .kpi .k { font-size: 12px; color: #596068; }
+  .led .kpi .v { font-size: 21px; font-weight: 700; color: #1B1D1F; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .led .kpi .sub { font-size: 11px; color: #7A828C; margin-top: 2px; }
+  .led .kpi.dark { background: #1B1D1F; border-color: #1B1D1F; }
+  .led .kpi.dark .k { color: #9aa3a9; display: flex; justify-content: space-between; }
+  .led .kpi.dark .v { color: #fff; font-size: 24px; }
+  .led .kpi.dark .sub { color: #4FBE8B; }
+  .up-cur { color: #16a34a; } .down-cur { color: #ef4444; }
+  .up-led { color: #16865B; } .down-led { color: #C3424F; }
+
+  /* ---- 按钮 ---- */
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn { font-size: 13px; font-weight: 700; padding: 9px 18px; cursor: default; border: 1px solid transparent; }
+  .cur .btn { border-radius: 8px; }
+  .cur .btn.primary { background: #eab308; color: #fff; box-shadow: 0 2px 8px rgba(234,179,8,.35); }
+  .cur .btn.ghost { background: #fff; border-color: #e2e8f0; color: #334155; }
+  .cur .btn.danger { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.3); color: #ef4444; }
+  .led .btn { border-radius: 6px; }
+  .led .btn.primary { background: #E3B319; color: #1B1D1F; }
+  .led .btn.black { background: #1B1D1F; color: #fff; }
+  .led .btn.ghost { background: #fff; border-color: #D8DCDF; color: #1B1D1F; }
+  .note { font-size: 11px; color: #7A828C; margin-top: 6px; }
+
+  /* ---- 图表色板 + 迷你柱状 ---- */
+  .chips { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .chips i { width: 26px; height: 26px; border-radius: 5px; display: inline-block; border: 1px solid rgba(0,0,0,.06); }
+  .bars { display: flex; align-items: flex-end; gap: 10px; height: 110px; padding: 10px 12px 0; background: #fff; border-radius: 8px; }
+  .cur .bars { border: 1px solid #e2e8f0; box-shadow: 0 8px 28px rgba(15,23,42,.06); }
+  .led .bars { border: 1px solid #D8DCDF; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .bars i { flex: 1; border-radius: 4px 4px 0 0; }
+  .bars-cap { font-size: 11px; color: #7A828C; margin-top: 6px; }
+
+  /* ---- 表格 ---- */
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: 12.5px; }
+  .cur table { border-radius: 12px; overflow: hidden; box-shadow: 0 8px 28px rgba(15,23,42,.06); border: 1px solid #e2e8f0; }
+  .led table { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.04); border: 1px solid #D8DCDF; }
+  th { text-align: left; font-size: 11px; padding: 9px 12px; }
+  .cur th { color: #64748b; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+  .led th { color: #596068; background: #FAFAF9; border-bottom: 1px solid #D8DCDF; }
+  td { padding: 10px 12px; }
+  .cur td { border-bottom: 1px solid #f1f5f9; }
+  .led td { border-bottom: 1px solid #ECEEEC; font-variant-numeric: tabular-nums; }
+  .num { text-align: right; }
+  .chip { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 20px; font-weight: 600; }
+  .cur .chip { background: rgba(34,197,94,.1); color: #16a34a; }
+  .led .chip { background: rgba(49,107,214,.1); color: #316BD6; border-radius: 4px; }
+
+  /* ---- 涨跌色三套并存示意 ---- */
+  .triple { display: flex; gap: 14px; flex-wrap: wrap; }
+  .triple .pair { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; font-size: 11px; color: #64748b; }
+  .triple .pair b { display: block; font-size: 13px; margin-top: 2px; }
+  .eye { font-size: 12px; }
+
+  /* ---- 结论条 ---- */
+  .verdict { max-width: 1440px; margin: 24px auto 0; background: #1B1D1F; color: #d5d9dc; border-radius: 10px; padding: 18px 22px; font-size: 13px; }
+  .verdict b { color: #E3B319; }
+  .verdict ul { margin: 8px 0 0 18px; }
+  .verdict li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>UI 方案对比 · 现状 vs LEDGER 账本式规范</h1>
+  <p>左列：当前线上样式（global.css 实际 token 还原）　·　右列：LEDGER UI 规范（Harvest Yellow / 账本式 / 反 AI 味）。同一内容，两种渲染。</p>
+</div>
+
+<div class="board">
+  <!-- ================= 左：现状 ================= -->
+  <div class="cur">
+    <div class="col-title">现状 <small>brand #eab308 · slate 冷灰 · 大阴影 · 8 色图表</small></div>
+    <div class="panel">
+
+      <div class="sec-label">① 色彩 Token</div>
+      <div class="swatches">
+        <div class="sw"><i style="background:#0f172a"></i><b>Ink</b><span>#0F172A</span></div>
+        <div class="sw"><i style="background:#64748b"></i><b>Ink-3</b><span>#64748B</span></div>
+        <div class="sw"><i style="background:#e2e8f0"></i><b>Border</b><span>#E2E8F0</span></div>
+        <div class="sw"><i style="background:#f8fafc"></i><b>Bg 冷灰蓝</b><span>#F8FAFC</span></div>
+        <div class="sw"><i style="background:#eab308"></i><b>品牌黄</b><span>#EAB308</span></div>
+        <div class="sw"><i style="background:#16a34a"></i><b>OK 绿</b><span>#16A34A</span></div>
+        <div class="sw"><i style="background:#ef4444"></i><b>Danger 红</b><span>#EF4444</span></div>
+        <div class="sw"><i style="background:#3b82f6"></i><b>Blue</b><span>#3B82F6</span></div>
+      </div>
+      <div class="sec-label" style="margin-top:14px">⚠ 涨跌色三套并存（真实现状）</div>
+      <div class="triple">
+        <div class="pair">global.css 语义色<b><span class="up-cur">▲ #16A34A</span>　<span class="down-cur">▼ #EF4444</span></b></div>
+        <div class="pair">总览页图表<b><span style="color:#22c55e">▲ #22C55E</span>　<span style="color:#ef4444">▼ #EF4444</span></b></div>
+        <div class="pair">绩效页图表<b><span style="color:#14b8a6">▲ #14B8A6</span>　<span style="color:#b91c1c">▼ #B91C1C</span></b></div>
+      </div>
+
+      <div class="sec-label">② KPI 卡（总览页现状：白卡 + 彩色顶边 + 大浮起阴影）</div>
+      <div class="kpi-row">
+        <div class="kpi">
+          <div class="k">总净资产 <span class="eye">👁</span></div>
+          <div class="v">$1,234,567<span style="font-size:12px;color:#94a3b8"> USD</span></div>
+          <div class="sub up-cur">今日 +12,345.67 · +1.01%</div>
+        </div>
+        <div class="kpi ok">
+          <div class="k">累计收益（年化）</div>
+          <div class="v up-cur">+12.34%</div>
+          <div class="sub">本年 +8.67%</div>
+        </div>
+        <div class="kpi violet">
+          <div class="k">最大回撤</div>
+          <div class="v down-cur">-8.56%</div>
+          <div class="sub">恢复天数 62</div>
+        </div>
+      </div>
+
+      <div class="sec-label">③ 按钮（现有两级半：黄主操作 / 描边 / 红危险）</div>
+      <div class="btn-row">
+        <span class="btn primary">保存方案</span>
+        <span class="btn ghost">次要操作</span>
+        <span class="btn danger">删除</span>
+      </div>
+      <div class="note">缺「高优先级」层级；主黄 #EAB308 偏亮，白字对比度不足</div>
+
+      <div class="sec-label">④ 图表色板（8 色，含粉紫青）＋ 月度盈亏柱</div>
+      <div class="chips">
+        <i style="background:#eab308"></i><i style="background:#f97316"></i><i style="background:#22c55e"></i><i style="background:#3b82f6"></i><i style="background:#8b5cf6"></i><i style="background:#ec4899"></i><i style="background:#14b8a6"></i><i style="background:#ef4444"></i>
+      </div>
+      <div class="bars">
+        <i style="height:55%;background:linear-gradient(180deg,#14b8a6,#0d9488)"></i>
+        <i style="height:80%;background:linear-gradient(180deg,#14b8a6,#0d9488)"></i>
+        <i style="height:35%;background:linear-gradient(180deg,#b91c1c,#991b1b);align-self:flex-end"></i>
+        <i style="height:65%;background:linear-gradient(180deg,#14b8a6,#0d9488)"></i>
+        <i style="height:45%;background:linear-gradient(180deg,#b91c1c,#991b1b)"></i>
+        <i style="height:90%;background:linear-gradient(180deg,#14b8a6,#0d9488)"></i>
+      </div>
+      <div class="bars-cap">绩效页现状：青绿 #14B8A6 / 暗红 #B91C1C 渐变柱</div>
+
+      <div class="sec-label">⑤ 持仓表格行</div>
+      <table>
+        <thead><tr><th>资产名称</th><th class="num">持仓市值</th><th class="num">现价</th><th class="num">浮动盈亏</th><th class="num">权重</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td><b>苹果公司</b> <span style="color:#94a3b8;font-size:11px">AAPL</span></td><td class="num">23,456.78</td><td class="num">195.47</td><td class="num up-cur"><b>+5,443.20 · +30.72%</b></td><td class="num">1.90%</td><td><span class="chip">进行中</span></td></tr>
+          <tr><td><b>英伟达</b> <span style="color:#94a3b8;font-size:11px">NVDA</span></td><td class="num">18,220.10</td><td class="num">128.33</td><td class="num down-cur"><b>-1,204.55 · -6.20%</b></td><td class="num">1.48%</td><td><span class="chip">进行中</span></td></tr>
+        </tbody>
+      </table>
+      <div class="note">圆角 7-20px 七档混用 · 阴影 0 8px 28px · 防窥用 🙈 emoji</div>
+
+    </div>
+  </div>
+
+  <!-- ================= 右：LEDGER ================= -->
+  <div class="led">
+    <div class="col-title">LEDGER 规范 <small>Harvest #E3B319 · 暖灰画布 · 平阴影 · 5 色图表</small></div>
+    <div class="panel">
+
+      <div class="sec-label">① 色彩 Token</div>
+      <div class="swatches">
+        <div class="sw"><i style="background:#1B1D1F"></i><b>Ink</b><span>#1B1D1F</span></div>
+        <div class="sw"><i style="background:#596068"></i><b>Secondary</b><span>#596068</span></div>
+        <div class="sw"><i style="background:#D8DCDF"></i><b>Border</b><span>#D8DCDF</span></div>
+        <div class="sw"><i style="background:#F4F5F3"></i><b>Canvas 暖灰</b><span>#F4F5F3</span></div>
+        <div class="sw"><i style="background:#E3B319"></i><b>Harvest 黄</b><span>#E3B319</span></div>
+        <div class="sw"><i style="background:#16865B"></i><b>Gain 绿</b><span>#16865B</span></div>
+        <div class="sw"><i style="background:#C3424F"></i><b>Loss 红</b><span>#C3424F</span></div>
+        <div class="sw"><i style="background:#316BD6"></i><b>Info 蓝</b><span>#316BD6</span></div>
+      </div>
+      <div class="sec-label" style="margin-top:14px">✓ 涨跌色全站唯一一套</div>
+      <div class="triple">
+        <div class="pair" style="border-color:#D8DCDF">语义色 / 图表 / 表格 全部统一<b><span class="up-led">▲ Gain #16865B</span>　<span class="down-led">▼ Loss #C3424F</span></b></div>
+        <div class="pair" style="border-color:#D8DCDF">精神与"青绿/暗红"导图口径一致<b style="color:#7A828C;font-weight:500">饱和度更低，长时间盯盘不刺眼</b></div>
+      </div>
+
+      <div class="sec-label">② KPI 卡（黑色主卡锚点 + 平阴影白卡）</div>
+      <div class="kpi-row">
+        <div class="kpi dark">
+          <div class="k"><span>总净资产（USD）</span><span class="eye" style="filter:grayscale(1)">◉</span></div>
+          <div class="v">$1,234,567<span style="font-size:13px;color:#7A828C">.89</span></div>
+          <div class="sub">今日收益 +12,345.67　+1.01%</div>
+        </div>
+        <div class="kpi">
+          <div class="k">累计收益（年化）</div>
+          <div class="v up-led">+12.34%</div>
+          <div class="sub">本年 +8.67%</div>
+        </div>
+        <div class="kpi">
+          <div class="k">最大回撤</div>
+          <div class="v down-led">-8.56%</div>
+          <div class="sub">恢复天数 62</div>
+        </div>
+      </div>
+
+      <div class="sec-label">③ 按钮（完整三级：主操作黄 / 高优先级黑 / 次要描边）</div>
+      <div class="btn-row">
+        <span class="btn primary">主要操作</span>
+        <span class="btn black">高优先级</span>
+        <span class="btn ghost">次要操作</span>
+      </div>
+      <div class="note">黄底配深字（对比度达标）；新增黑色档给"保存复盘 / 标记成交"类确认动作</div>
+
+      <div class="sec-label">④ 图表色板（5 色克制）＋ 月度盈亏柱</div>
+      <div class="chips">
+        <i style="background:#E3B319"></i><i style="background:#16865B"></i><i style="background:#316BD6"></i><i style="background:#596068"></i><i style="background:#D8DCDF"></i>
+      </div>
+      <div class="bars">
+        <i style="height:55%;background:#16865B"></i>
+        <i style="height:80%;background:#16865B"></i>
+        <i style="height:35%;background:#C3424F"></i>
+        <i style="height:65%;background:#16865B"></i>
+        <i style="height:45%;background:#C3424F"></i>
+        <i style="height:90%;background:#16865B"></i>
+      </div>
+      <div class="bars-cap">纯色柱（去渐变——反模式第 3 条：禁渐变光晕装饰）</div>
+
+      <div class="sec-label">⑤ 持仓表格行</div>
+      <table>
+        <thead><tr><th>资产名称</th><th class="num">持仓市值</th><th class="num">现价</th><th class="num">浮动盈亏</th><th class="num">权重</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td><b>苹果公司</b> <span style="color:#7A828C;font-size:11px">AAPL</span></td><td class="num">23,456.78</td><td class="num">195.47</td><td class="num up-led"><b>+5,443.20 · +30.72%</b></td><td class="num">1.90%</td><td><span class="chip">进行中</span></td></tr>
+          <tr><td><b>英伟达</b> <span style="color:#7A828C;font-size:11px">NVDA</span></td><td class="num">18,220.10</td><td class="num">128.33</td><td class="num down-led"><b>-1,204.55 · -6.20%</b></td><td class="num">1.48%</td><td><span class="chip">进行中</span></td></tr>
+        </tbody>
+      </table>
+      <div class="note">圆角仅 6/10 两档 · 阴影 0 1px 2px · 等宽数字对齐（tabular-nums）· 图标用 SVG 不用 emoji</div>
+
+    </div>
+  </div>
+</div>
+
+<div class="verdict">
+  <b>一眼结论</b>：右列信息密度感与"账本可信感"更强，代价极小——A 级改动只动 CSS 变量与图表常量。
+  <ul>
+    <li><b>最大收益项</b>：涨跌色从三套并存 → 唯一一套（#16865B / #C3424F），全站涨跌语义即刻一致；</li>
+    <li><b>气质变化项</b>：画布从冷灰蓝 → 暖灰 #F4F5F3、阴影从"浮起" → "平贴"、柱状图去渐变，AI 味显著下降；</li>
+    <li><b>功能补齐项</b>：黑色总资产主卡 + 高优先级黑按钮，是现状没有的两个组件；</li>
+    <li><b>保留不动项</b>：绿涨红跌方向、间距体系、页面结构均与现状兼容，无需改任何业务代码。</li>
+  </ul>
+</div>
+
+</body>
+</html>
