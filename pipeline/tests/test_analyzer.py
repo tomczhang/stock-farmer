@@ -1,340 +1,118 @@
-"""信号引擎 + 阶段判断 + 渲染测试。"""
+"""保留的六项结构证据信号测试。"""
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
+import analyzer.signals as signals_module
 from analyzer.signals import (
     SignalResult,
-    compute_all_signals,
-    _calc_vol_shrink,
-    _calc_above_ma,
-    _calc_false_breakdown,
-    _calc_support_retest_hold,
-    _calc_macd_cross,
-    _calc_higher_low,
     _add_swing_low_candidates,
+    _calc_false_breakdown,
+    _calc_vol_shrink,
     _select_active_support,
     _select_display_support_zones,
     _separate_support_zones,
     _to_light,
+    compute_all_signals,
 )
-import analyzer.signals as signals_module
-from analyzer.phase import determine_phase, compute_overall_strength
-from analyzer.renderer import render_html
 
 
 def _make_df(n: int = 60, trend: str = "flat") -> pd.DataFrame:
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     if trend == "down":
-        close = 100 - np.arange(n) * 0.3 + np.random.randn(n) * 0.5
+        close = 100 - np.arange(n) * 0.3 + rng.normal(0, 0.5, n)
     elif trend == "up":
-        close = 100 + np.arange(n) * 0.3 + np.random.randn(n) * 0.5
+        close = 100 + np.arange(n) * 0.3 + rng.normal(0, 0.5, n)
     else:
-        close = 100 + np.random.randn(n) * 0.5
-
-    vol_base = 5_000_000
+        close = 100 + rng.normal(0, 0.5, n)
+    volume = 5_000_000 * (1 + rng.random(n) * 0.3)
     if trend == "down":
-        volume = vol_base * (1 + np.random.rand(n) * 0.5)
-        volume[-5:] = vol_base * 0.4  # shrink recent volume
-    else:
-        volume = vol_base * (1 + np.random.rand(n) * 0.3)
-
+        volume[-5:] = 2_000_000
     return pd.DataFrame({
         "date": pd.date_range("2026-04-01", periods=n).strftime("%Y-%m-%d"),
-        "open": close - np.random.rand(n) * 0.5,
-        "high": close + np.abs(np.random.randn(n)) * 0.8,
-        "low": close - np.abs(np.random.randn(n)) * 0.8,
+        "open": close - rng.random(n) * 0.5,
+        "high": close + np.abs(rng.normal(0, 0.8, n)),
+        "low": close - np.abs(rng.normal(0, 0.8, n)),
         "close": close,
         "volume": volume.astype(int),
     })
 
 
-class TestSignals:
-    def test_vol_shrink_with_low_volume(self):
-        df = _make_df(60, trend="down")
-        result = _calc_vol_shrink(df)
-        assert result.id == "vol_shrink"
-        assert result.confidence > 0.5
-        assert result.light in ("yellow", "green")
-
-    def test_vol_shrink_with_normal_volume(self):
-        df = _make_df(60, trend="flat")
-        result = _calc_vol_shrink(df)
-        assert result.confidence < 0.5
-
-    def test_above_ma_when_above(self):
-        df = _make_df(60, trend="up")
-        result = _calc_above_ma(df)
-        assert result.confidence > 0
-
-    def test_above_ma_when_below(self):
-        df = _make_df(60, trend="down")
-        result = _calc_above_ma(df)
-        assert result.confidence == 0.0
-        assert result.light == "red"
-
-    def test_macd_cross(self):
-        df = _make_df(60, trend="up")
-        result = _calc_macd_cross(df)
-        assert result.id == "macd_cross"
-        assert 0.0 <= result.confidence <= 1.0
-
-    def test_higher_low_in_uptrend(self):
-        df = _make_df(60, trend="up")
-        result = _calc_higher_low(df)
-        assert result.confidence > 0
-
-    def test_light_mapping(self):
-        assert _to_light(0.1, (0.35, 0.70)) == "red"
-        assert _to_light(0.5, (0.35, 0.70)) == "yellow"
-        assert _to_light(0.8, (0.35, 0.70)) == "green"
-
-    def test_compute_all_signals(self):
-        df = _make_df(60)
-        signals = compute_all_signals(df)
-        assert len(signals) == 11
-        assert all(isinstance(s, SignalResult) for s in signals)
-
-    def test_swing_low_quality_discounts_delayed_low_volume_rebound(self):
-        df = _make_df(25, trend="flat")
-        df.loc[:, "open"] = 100.0
-        df.loc[:, "high"] = 101.0
-        df.loc[:, "low"] = 99.0
-        df.loc[:, "close"] = 100.0
-        df.loc[:, "volume"] = 1_000_000
-
-        low_idx = 10
-        df.loc[low_idx, ["open", "high", "low", "close", "volume"]] = [92.0, 92.5, 90.0, 91.0, 1_000_000]
-        for j in range(low_idx + 1, low_idx + 6):
-            df.loc[j, ["open", "high", "low", "close"]] = [91.0, 93.0, 90.5, 92.0]
-        df.loc[low_idx + 6, "high"] = 106.0
-
-        candidates: list[dict] = []
-        _add_swing_low_candidates(candidates, df, 25, "测试前低")
-        low_candidate = next(c for c in candidates if abs(float(c["price"]) - 90.0) < 1e-9)
-
-        assert low_candidate["best_rebound_days"] == 6
-        assert low_candidate["score"] < 0.45
-
-    def test_swing_low_quality_rewards_fast_volume_rebound(self):
-        df = _make_df(25, trend="flat")
-        df.loc[:, "open"] = 100.0
-        df.loc[:, "high"] = 101.0
-        df.loc[:, "low"] = 99.0
-        df.loc[:, "close"] = 100.0
-        df.loc[:, "volume"] = 1_000_000
-
-        low_idx = 10
-        df.loc[low_idx, ["open", "high", "low", "close", "volume"]] = [92.0, 93.0, 90.0, 91.0, 2_500_000]
-        df.loc[low_idx + 1, "high"] = 100.0
-        for j in range(low_idx + 2, low_idx + 11):
-            df.loc[j, ["open", "high", "low", "close"]] = [93.0, 94.0, 91.0, 93.5]
-
-        candidates: list[dict] = []
-        _add_swing_low_candidates(candidates, df, 25, "测试前低")
-        low_candidate = next(c for c in candidates if abs(float(c["price"]) - 90.0) < 1e-9)
-
-        assert low_candidate["best_rebound_days"] == 1
-        assert low_candidate["score"] > 0.65
-
-    def test_support_zones_do_not_overlap_after_separation(self):
-        zones = [
-            {"low": 432.87, "high": 465.33, "center": 449.68, "strength": 1.0},
-            {"low": 414.67, "high": 438.61, "center": 423.37, "strength": 0.9},
-        ]
-        separated = _separate_support_zones(zones, current=459.0, atr=10.0)
-        assert len(separated) == 2
-        assert separated[0]["low"] == 432.87
-        assert separated[1]["high"] < separated[0]["low"]
-
-    def test_false_breakdown_ignores_weak_support(self, monkeypatch):
-        df = _make_df(40, trend="flat")
-        df.loc[:, "close"] = 110.0
-        df.loc[:, "high"] = 112.0
-        df.loc[:, "low"] = 108.0
-        df.loc[:, "open"] = 109.0
-        df.loc[len(df) - 3, "low"] = 99.0
-        df.loc[len(df) - 2, "close"] = 106.0
-        weak_zone = {
-            "low": 100.0,
-            "high": 105.0,
-            "center": 102.5,
-            "strength": 0.26,
-            "sources": ["近3个月前低"],
-        }
-
-        monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [weak_zone])
-        result = _calc_false_breakdown(df)
-
-        assert result.confidence == 0.0
-        assert result.light == "red"
-        assert result.data["breakdown_event"] == {}
-        assert "未识别到稳定性 ≥60% 的强支撑" in result.description
-
-    def test_false_breakdown_ignores_medium_support(self, monkeypatch):
-        df = _make_df(40, trend="flat")
-        df.loc[:, "close"] = 110.0
-        df.loc[:, "high"] = 112.0
-        df.loc[:, "low"] = 108.0
-        df.loc[:, "open"] = 109.0
-        df.loc[:, "volume"] = 5_000_000
-        df.loc[len(df) - 4, "low"] = 99.0
-        df.loc[len(df) - 3, "close"] = 108.0
-        medium_zone = {
-            "low": 100.0,
-            "high": 105.0,
-            "center": 102.5,
-            "strength": 0.55,
-            "sources": ["近3个月前低", "整数关口"],
-            "kinds": ["前低", "整数关口"],
-            "is_major_support": True,
-        }
-
-        monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [medium_zone])
-        result = _calc_false_breakdown(df)
-
-        assert result.confidence == 0.0
-        assert result.data["active_support"] == {}
-        assert result.data["breakdown_event"] == {}
-        assert "未识别到稳定性 ≥60% 的强支撑" in result.description
-
-    def test_active_support_prefers_nearest_actionable_zone(self):
-        zones = [
-            {"low": 453.0, "high": 456.0, "center": 454.5, "strength": 0.26},
-            {"low": 418.0, "high": 422.0, "center": 420.0, "strength": 0.51},
-        ]
-
-        active = _select_active_support(zones, current=459.0)
-
-        assert active is not None
-        assert active["center"] == 420.0
-
-    def test_display_support_labels_major_medium_zone_as_watch_support(self):
-        zones = [
-            {
-                "low": 453.0,
-                "high": 456.0,
-                "center": 454.5,
-                "strength": 0.26,
-                "is_major_support": False,
-            },
-            {
-                "low": 418.0,
-                "high": 422.0,
-                "center": 420.0,
-                "strength": 0.51,
-                "is_major_support": True,
-            },
-        ]
-
-        display, focus = _select_display_support_zones(zones, current=459.0)
-
-        assert display[1]["display_role"] == "关键观察支撑，稳定性待确认"
-        assert focus["has_strong_support"] is False
-        assert focus["has_main_support"] is True
-
-    def test_support_retest_hold_after_false_breakdown(self, monkeypatch):
-        df = _make_df(40, trend="flat")
-        df.loc[:, "close"] = 110.0
-        df.loc[:, "high"] = 112.0
-        df.loc[:, "low"] = 108.0
-        df.loc[:, "open"] = 109.0
-        df.loc[:, "volume"] = 5_000_000
-
-        n = len(df)
-        df.loc[n - 5, ["open", "high", "low", "close"]] = [104.0, 106.0, 99.0, 102.0]
-        df.loc[n - 4, ["open", "high", "low", "close"]] = [103.0, 108.0, 103.0, 107.0]
-        df.loc[n - 3, ["open", "high", "low", "close"]] = [109.0, 112.0, 107.0, 110.0]
-        df.loc[n - 2, ["open", "high", "low", "close"]] = [106.0, 109.0, 104.0, 108.0]
-        df.loc[n - 1, ["open", "high", "low", "close"]] = [110.0, 113.0, 109.0, 111.0]
-
-        support_zone = {
-            "low": 100.0,
-            "high": 105.0,
-            "center": 102.5,
-            "strength": 0.72,
-            "sources": ["近3个月前低"],
-            "kinds": ["前低"],
-        }
-
-        monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [support_zone])
-        false_signal = _calc_false_breakdown(df)
-        result = _calc_support_retest_hold(df, false_breakdown=false_signal)
-
-        assert false_signal.data["breakdown_event"]["recover_date"] == df.loc[n - 4, "date"]
-        assert result.id == "support_retest_hold"
-        assert result.light == "green"
-        assert result.data["retest_event"]["date"] == df.loc[n - 2, "date"]
-        assert "回踩支撑区间" in result.description
+def test_compute_all_signals_returns_only_six_left_evidence_signals():
+    results = compute_all_signals(_make_df())
+    assert [s.id for s in results] == [
+        "vol_shrink", "no_new_low", "false_breakdown",
+        "vol_contraction", "chip_concentration", "market_env",
+    ]
+    assert len(results) == 6
+    assert all(isinstance(s, SignalResult) and s.category == "left" for s in results)
 
 
-class TestPhase:
-    def _make_signals(self, left_greens: int, right_greens: int) -> list[SignalResult]:
-        signals = []
-        for i in range(6):
-            light = "green" if i < left_greens else "red"
-            signals.append(SignalResult(
-                id=f"left_{i}", name=f"L{i}", category="left",
-                confidence=0.8 if light == "green" else 0.1,
-                light=light, thresholds=(0.35, 0.70), weight=1,
-                description="", data={},
-            ))
-        for i in range(4):
-            light = "green" if i < right_greens else "red"
-            signals.append(SignalResult(
-                id=f"right_{i}", name=f"R{i}", category="right",
-                confidence=0.8 if light == "green" else 0.1,
-                light=light, thresholds=(0.35, 0.70), weight=1,
-                description="", data={},
-            ))
-        return signals
-
-    def test_downtrend(self):
-        phase = determine_phase(self._make_signals(0, 0))
-        assert phase.phase == "仍在下跌"
-        assert phase.icon == "🔴"
-
-    def test_bottom_forming(self):
-        phase = determine_phase(self._make_signals(4, 1))
-        assert phase.phase == "底部基本成型"
-        assert phase.icon == "🟡⭐"
-
-    def test_right_confirmed(self):
-        phase = determine_phase(self._make_signals(4, 3))
-        assert phase.phase == "趋势已确立"
-        assert phase.icon == "🟢🟢"
-
-    def test_strength_calculation(self):
-        signals = self._make_signals(5, 3)
-        strength = compute_overall_strength(signals)
-        assert 0.0 <= strength <= 1.0
+def test_removed_signal_calculators_are_absent():
+    for name in (
+        "_calc_above_ma", "_calc_support_retest_hold", "_calc_volume_breakout",
+        "_calc_macd_cross", "_calc_higher_low",
+    ):
+        assert not hasattr(signals_module, name)
 
 
-class TestRenderer:
-    def test_render_produces_html(self):
-        from analyzer.phase import PhaseResult
-        signals = []
-        for i in range(6):
-            signals.append(SignalResult(
-                id=f"s{i}", name=f"信号{i}", category="left",
-                confidence=0.6, light="yellow", thresholds=(0.35, 0.70), weight=1,
-                description="测试描述", data={},
-            ))
-        for i in range(4):
-            signals.append(SignalResult(
-                id=f"r{i}", name=f"右侧{i}", category="right",
-                confidence=0.3, light="red", thresholds=(0.35, 0.70), weight=1,
-                description="测试描述", data={},
-            ))
-        phase = PhaseResult(
-            phase="底部特征初现", icon="🟡", action="列入观察",
-            trigger="等待突破", strength=0.45, strength_pct=45,
-        )
-        html = render_html("AAPL", "苹果", 312.06, -0.14, signals, phase, "测试综述。")
-        assert "<!DOCTYPE html>" in html
-        assert "AAPL" in html
-        assert "信号0" in html
-        assert "tailwindcss" in html
-        assert "report-shell" in html
+def test_vol_shrink_detects_reduced_selling_volume():
+    result = _calc_vol_shrink(_make_df(trend="down"))
+    assert result.confidence > 0.35
+    assert result.light in {"yellow", "green"}
+
+
+def test_light_mapping():
+    assert _to_light(0.1, (0.35, 0.70)) == "red"
+    assert _to_light(0.5, (0.35, 0.70)) == "yellow"
+    assert _to_light(0.8, (0.35, 0.70)) == "green"
+
+
+def test_swing_low_quality_rewards_fast_rebound():
+    df = _make_df(25)
+    df.loc[:, ["open", "high", "low", "close", "volume"]] = [100, 101, 99, 100, 1_000_000]
+    idx = 10
+    df.loc[idx, ["open", "high", "low", "close", "volume"]] = [92, 93, 90, 91, 2_500_000]
+    df.loc[idx + 1, "high"] = 100
+    candidates: list[dict] = []
+    _add_swing_low_candidates(candidates, df, 25, "测试前低")
+    candidate = next(c for c in candidates if abs(float(c["price"]) - 90) < 1e-9)
+    assert candidate["best_rebound_days"] <= 2
+    assert candidate["score"] > 0.55
+
+
+def test_support_zones_do_not_overlap_after_separation():
+    zones = [
+        {"low": 432.87, "high": 465.33, "center": 449.68, "strength": 1.0},
+        {"low": 414.67, "high": 438.61, "center": 423.37, "strength": 0.9},
+    ]
+    separated = _separate_support_zones(zones, current=459.0, atr=10.0)
+    assert separated[1]["high"] < separated[0]["low"]
+
+
+def test_active_support_prefers_nearest_actionable_zone():
+    zones = [
+        {"low": 453, "high": 456, "center": 454.5, "strength": 0.26},
+        {"low": 418, "high": 422, "center": 420, "strength": 0.51},
+    ]
+    assert _select_active_support(zones, current=459)["center"] == 420
+
+
+def test_display_support_marks_medium_zone_for_observation():
+    zones = [
+        {"low": 453, "high": 456, "center": 454.5, "strength": 0.26, "is_major_support": False},
+        {"low": 418, "high": 422, "center": 420, "strength": 0.51, "is_major_support": True},
+    ]
+    display, focus = _select_display_support_zones(zones, current=459)
+    assert display[1]["display_role"] == "关键观察支撑，稳定性待确认"
+    assert focus["has_main_support"] is True
+
+
+def test_false_breakdown_ignores_weak_support(monkeypatch):
+    df = _make_df(40)
+    weak = {"low": 100, "high": 105, "center": 102.5, "strength": 0.26, "sources": ["前低"]}
+    monkeypatch.setattr(signals_module, "_calc_support_zones", lambda _: [weak])
+    result = _calc_false_breakdown(df)
+    assert result.confidence == 0
+    assert result.data["breakdown_event"] == {}

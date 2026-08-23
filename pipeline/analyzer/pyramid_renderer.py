@@ -17,7 +17,7 @@ _ACTION_LABELS = {
 _EVENT_LABELS = {
     "stop_buy": "🚫 停止买入红线",
     "trim_start": "📤 倒金字塔减仓启动",
-    "stop_loss": "🛑 右侧失效止损",
+    "stop_loss": "🛑 支撑失效止损",
     "skip_buy": "⏭ 跳过买入",
 }
 
@@ -34,7 +34,7 @@ def _conclusion(payload: dict[str, Any]) -> tuple[str, str]:
     if not summary["entered"]:
         return summary.get("reason", "未入场"), "var(--color-default)"
     if summary["stop_loss_triggered"]:
-        return "右侧判断失效，触发止损清仓退出", "var(--color-danger)"
+        return "支撑失效，触发止损清仓退出", "var(--color-danger)"
     parts = []
     if summary["negative_cost"]:
         parts.append("底仓已做成负成本")
@@ -100,8 +100,8 @@ def _render_entry_card(payload: dict[str, Any]) -> str:
     return f"""<section class="rounded-2xl p-5 mb-6" style="border: 1px solid var(--color-divider); box-shadow: var(--shadow-xs); background: var(--color-surface);">
   <div class="text-[11px] uppercase tracking-wider mb-2" style="color: var(--text-muted);">入场与锚点</div>
   <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm" style="color: var(--text-secondary);">
-    <div>信号日 <strong style="color: var(--text-primary);">{entry.get('signal_date', '—')}</strong><br/>
-      <span class="text-xs">{entry.get('tier_label', '')} · 右侧触发 {'、'.join(entry.get('right_green', []) or ['—'])}</span></div>
+    <div>手动决策日 <strong style="color: var(--text-primary);">{entry.get('decision_date', '—')}</strong><br/>
+      <span class="text-xs">用户选择日期 · 系统不判断买点</span></div>
     <div>入场价 <strong style="color: var(--text-primary);">{entry.get('fill_price', '—')}</strong><br/>
       <span class="text-xs">次日开盘成交</span></div>
     <div>目标价 <strong style="color: var(--text-primary);">{target.get('price', '—')}</strong><br/>

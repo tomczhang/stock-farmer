@@ -820,7 +820,7 @@ button {
   }
 }
 
-/* ---- 历史复盘 / 证伪镜（add-right-signal-backtest） ---- */
+/* ---- 筑底历史复盘 / 证伪镜 ---- */
 
 .ghost-button {
   display: inline-flex;
@@ -941,7 +941,22 @@ button {
   }
 }
 
-/* ---- 趋势状态 + 本工具适用性（add-trend-regime） ---- */
+.chart-card {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 18px;
+  box-shadow: var(--shadow-xs);
+}
+
+.chart-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-muted, #8a94a3);
+}
+
+/* ---- 趋势状态 + 本工具适用性 ---- */
 
 .trend-fit-banner {
   margin-top: 12px;

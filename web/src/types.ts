@@ -85,15 +85,10 @@ export interface SignalReportPoint {
   volume: number;
 }
 
-export interface SignalRightState {
-  key: "default" | "warning-soft" | "warning" | "success";
-  label: "未触发" | "酝酿中" | "临界" | "已触发";
-}
-
 export interface SignalReportSignal {
   id: string;
   name: string;
-  category: "left" | "right";
+  category: "left";
   confidence: number;
   confidence_pct: number;
   light: "red" | "yellow" | "green";
@@ -103,27 +98,9 @@ export interface SignalReportSignal {
   weight_label: string;
   description: string;
   data: Record<string, unknown>;
-  right_state: SignalRightState | null;
 }
 
-export interface SignalReportGroupSummary {
-  key: "left" | "right";
-  label: string;
-  score: number;
-  score_pct: number;
-  weight: number;
-  confirmed_count: number;
-  total_count: number;
-  /** 左侧=「左侧准备度」，右侧=「右侧触发度」 */
-  role_label: string;
-  /** 该侧分数代表什么的简短说明 */
-  role_desc: string;
-}
-
-/**
- * 轻量前瞻结果标签：仅作复盘 / 证伪展示，绝不参与 as-of 当天判断。
- * 某个水平未来交易日不足时为 null。
- */
+/** 轻量前瞻结果标签：仅作复盘 / 证伪展示，不参与 as-of 当天判断。 */
 export interface ForwardOutcomeLabels {
   d5_pct: number | null;
   d10_pct: number | null;
@@ -132,30 +109,6 @@ export interface ForwardOutcomeLabels {
   max_drawdown_20d_pct: number | null;
 }
 
-/** 右侧趋势序列中的一个摘要点 */
-export interface RightTrendPoint {
-  date: string;
-  close: number;
-  /** 窗口内归一化收盘价 0~100，便于与确认度同轴叠放 */
-  normalized_close_pct: number;
-  /** 总结构强度百分比 */
-  score_pct: number;
-  /** 右侧触发度百分比 */
-  right_score_pct: number;
-  phase: string;
-  right_confirmed_count: number;
-  right_total_count: number;
-  /** 每个右侧信号的 4 态 key */
-  states: Record<string, "default" | "warning-soft" | "warning" | "success">;
-  forward_returns: ForwardOutcomeLabels | null;
-}
-
-export interface RightTrend {
-  window: number;
-  points: RightTrendPoint[];
-}
-
-/** 历史复盘元数据：说明分析日期如何解析、用了哪段数据窗口 */
 export interface ReportContext {
   mode: "current" | "historical";
   requested_as_of: string | null;
@@ -166,7 +119,7 @@ export interface ReportContext {
   used_historical_cutoff: boolean;
   volume_profile_mode: string;
   forward_outcomes: ForwardOutcomeLabels | null;
-  rules_version: string;
+  rules_version: "2" | string;
 }
 
 export interface BottomingSignDimension {
@@ -180,7 +133,6 @@ export interface BottomingSignDimension {
 export interface BottomingSign {
   id: string;
   name: string;
-  /** 大白话别名，如“想跌却跌不动” */
   plain_name: string;
   score: number;
   score_pct: number;
@@ -200,66 +152,60 @@ export interface BottomingBlock {
   tier_label: string;
   icon: string;
   action: string;
-  next_trigger: string;
-  /** 洗盘干净度：结构强度语义，非胜率 / 概率 */
+  next_observation: string;
+  /** 筑底结构强度，不代表胜率、概率或买点。 */
   cleanliness: number;
   cleanliness_pct: number;
   cleanliness_label: string;
   cleanliness_caption: string;
-  regime?: string;
+  regime?: "uptrend" | "downtrend" | "range" | "unknown";
   signs: BottomingSign[];
 }
 
+export interface BottomingHistoryPoint {
+  date: string;
+  close: number;
+  normalized_close_pct: number;
+  tier: BottomingBlock["tier"];
+  tier_label: string;
+  cleanliness_pct: number;
+  sign_states: Record<string, BottomingSign["state"]>;
+  sign_scores_pct: Record<string, number>;
+  forward_returns: ForwardOutcomeLabels | null;
+}
+
+export interface BottomingHistory {
+  window: number;
+  points: BottomingHistoryPoint[];
+}
+
 export interface SignalReportResponse {
+  schema_version: 2;
   ticker: string;
   name: string;
   price: number | null;
   change_pct: number | null;
   analyzed_at: string;
   conclusion: {
-    phase: string;
+    tier: BottomingBlock["tier"];
+    tier_label: string;
     icon: string;
     action: string;
-    trigger: string;
-    strength: number;
-    strength_pct: number;
-    /** 价格趋势状态：uptrend / downtrend / range / unknown */
-    regime?: "uptrend" | "downtrend" | "range" | "unknown";
-    /** 筑底判读档位（conclusion 由筑底判读驱动时存在） */
-    tier?: string;
+    next_observation: string;
+    structure_strength: number;
+    structure_strength_pct: number;
+    regime: "uptrend" | "downtrend" | "range" | "unknown";
   };
-  /** 筑底三迹象判读区块；旧 payload 缓存可能缺失，缺失时回退现有结论区渲染 */
-  bottoming?: BottomingBlock | null;
-  confirmation: {
-    score: number;
-    score_pct: number;
-    total_weight: number;
-    formula: string;
-    left: SignalReportGroupSummary;
-    right: SignalReportGroupSummary;
-    /** 总分语义标签：「结构强度」，非准确率 / 胜率 / 概率 */
-    score_label: string;
-    score_caption: string;
-    /** 左右分层诊断文案 */
-    diagnosis: string;
-  };
+  bottoming: BottomingBlock;
   signals: SignalReportSignal[];
-  groups: {
-    left: SignalReportSignal[];
-    right: SignalReportSignal[];
-  };
   narrative: string;
   chart_data: {
     klines: SignalReportPoint[];
     index_klines: Array<{ date: string; close: number }>;
-    volume_profile: Array<{
-      price_level: number;
-      volume: number;
-      pct: number;
-    }>;
+    volume_profile: Array<{ price_level: number; volume: number; pct: number }>;
   };
   report_context: ReportContext;
-  right_trend: RightTrend;
+  bottoming_history: BottomingHistory;
   disclaimer: string;
 }
 
@@ -315,10 +261,11 @@ export interface PyramidSummary {
 }
 
 export interface PyramidEntry {
-  signal_date?: string;
-  tier?: string;
-  tier_label?: string;
-  right_green?: string[];
+  decision_date: string;
+  mode: "manual";
+  mode_label: string;
+  bottoming_tier?: string;
+  bottoming_tier_label?: string;
   cleanliness_pct?: number;
   fill_price: number | null;
   support: { price: number; source: string } | null;
@@ -326,6 +273,7 @@ export interface PyramidEntry {
 }
 
 export interface PyramidBacktestResponse {
+  schema_version: 2;
   ticker: string;
   as_of: string;
   effective_date: string;

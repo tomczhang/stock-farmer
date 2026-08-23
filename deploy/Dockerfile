@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # 构建上下文 = 仓库根目录：docker build -f deploy/Dockerfile .
-# 产物：单容器 = Python 信号/回测 API + web 前端静态资源（同源部署）
+# 产物：单容器 = Python 筑底/纪律推演 API + web 前端静态资源（同源部署）
 
 # ---- 前端构建 ----
 FROM node:20-slim AS web-build

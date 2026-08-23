@@ -1,9 +1,9 @@
-# 信号报告 + 金字塔回测 · VPS 部署
+# 筑底结构报告 + 金字塔纪律推演 · VPS 部署
 
 单容器方案：`pipeline/server.py`（Python API + 托管 web 前端静态资源）+ Caddy（HTTPS 反代，Basic Auth 可选、默认关闭）。
 与 `portfolio/deploy` 相同模式，更新同样是 `git pull && docker compose up -d --build`。
 
-> 为什么不在 Cloudflare：信号判读与回测是 Python 实时计算，Workers（TS）跑不了；
+> 为什么不在 Cloudflare：筑底判读与纪律推演是 Python 实时计算，Workers（TS）跑不了；
 > PE 分位产品线继续走 Cloudflare Pages/Workers/D1，互不影响。
 
 ## 首次部署（约 10 分钟）

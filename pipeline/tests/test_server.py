@@ -211,6 +211,18 @@ def _get_raw(url: str) -> tuple[int, bytes, dict]:
         return exc.code, exc.read(), dict(exc.headers)
 
 
+class TestRemovedEntryLabRoutes:
+    def test_entry_scan_api_is_removed(self, base_url):
+        status, body = _get(f"{base_url}/api/entry-scan/AAPL")
+        assert status == 404
+        assert body["error"] == "not_found"
+
+    def test_entry_lab_page_is_removed(self, base_url):
+        status, body = _get(f"{base_url}/entry-lab")
+        assert status == 404
+        assert body["error"] == "not_found"
+
+
 class TestStaticServing:
     @pytest.fixture
     def static_base_url(self, tmp_path):

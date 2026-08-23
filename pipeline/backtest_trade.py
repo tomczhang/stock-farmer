@@ -36,13 +36,13 @@ def run(
     summary = payload["summary"]
     if summary["entered"]:
         print(
-            f"  入场 {payload['entry']['fill_price']}，"
+            f"  手动决策日次日首仓 {payload['entry']['fill_price']}，"
             f"交易 {len(payload['trades'])} 笔，"
             f"盈亏 {summary['pnl']}（{summary['pnl_pct']}%），"
             f"底仓 {summary['shares']} 股 净成本 {summary['net_cost']}"
         )
     else:
-        print(f"  {summary.get('reason', '未入场')}")
+        print(f"  {summary.get('reason', '首仓未成交')}")
 
     html = render_pyramid_html(payload)
     out = Path(output_dir) if output_dir else Path(__file__).parent / "output"

@@ -220,7 +220,7 @@ class TestComputeBottoming:
         )
         assert 0.0 <= verdict.cleanliness <= 1.0
         assert verdict.cleanliness_pct == int(round(verdict.cleanliness * 100))
-        assert verdict.next_trigger
+        assert verdict.next_observation
 
     def test_reuses_precomputed_signals(self):
         df = _make_df(n=120)
@@ -287,7 +287,7 @@ class TestComputeBottoming:
                     assert word not in text
         df = _make_df(n=120)
         verdict = compute_bottoming(df)
-        texts = [verdict.action, verdict.next_trigger, verdict.tier_label]
+        texts = [verdict.action, verdict.next_observation, verdict.tier_label]
         texts += [s.description for s in verdict.signs]
         for text in texts:
             for word in FORBIDDEN_WORDS:

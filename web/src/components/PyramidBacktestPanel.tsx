@@ -19,13 +19,13 @@ const ACTION_LABELS: Record<PyramidTrade["action"], string> = {
 const EVENT_LABELS: Record<string, string> = {
   stop_buy: "🚫 停止买入红线",
   trim_start: "📤 倒金字塔减仓启动",
-  stop_loss: "🛑 右侧失效止损",
+  stop_loss: "🛑 支撑失效止损",
   skip_buy: "⏭ 跳过买入",
 };
 
 /**
- * 金字塔交易回测交互页：选任意标的 + 任意历史时点，
- * 逐日推演「右侧入场 → 金字塔加仓 → 红线 → 倒金字塔减仓 → 止损」账本。
+ * 金字塔纪律推演：用户手动选择决策日，次日开盘建立标准首仓，
+ * 后续只按价格档位、红线、减仓和支撑止损规则执行。
  */
 export function PyramidBacktestPanel() {
   const [tickerInput, setTickerInput] = useState("DEMO");
@@ -76,10 +76,10 @@ export function PyramidBacktestPanel() {
     <div className="pyramid-page">
       <section className="pyramid-form-card">
         <div>
-          <span className="section-label">金字塔交易回测</span>
-          <h2>选任意时点，验证右侧纪律打法</h2>
+          <span className="section-label">金字塔纪律推演</span>
+          <h2>手动选择决策日，验证仓位纪律</h2>
           <p className="pyramid-form-hint">
-            入场=筑底基本成立+右侧触发 · 金字塔加仓 · 停止买入红线 ·
+            决策日次日开盘建首仓 · 价格档位递减加仓 · 停止买入红线 ·
             倒金字塔减仓 · 跌破支撑止损（日线数据最多约 5 年）
           </p>
         </div>
@@ -95,8 +95,8 @@ export function PyramidBacktestPanel() {
             type="date"
             value={asOfInput}
             onChange={(e) => setAsOfInput(e.target.value)}
-            aria-label="回测起点日期"
-            title="从该日期开始逐日推演"
+            aria-label="手动决策日期"
+            title="系统不判断买点；次一交易日开盘建立标准首仓"
           />
           <input
             type="number"
@@ -116,8 +116,8 @@ export function PyramidBacktestPanel() {
 
       {loading ? (
         <section className="state-panel">
-          <h1>回测推演中…</h1>
-          <p>未入场阶段需逐日重算筑底判读，可能需要数秒。</p>
+          <h1>纪律推演中…</h1>
+          <p>正在锚定决策日支撑、目标与后续价格档位。</p>
         </section>
       ) : null}
       {!loading && error ? (
@@ -149,12 +149,9 @@ function BacktestResult({ result }: { result: PyramidBacktestResponse }) {
         </>
       ) : (
         <section className="state-panel">
-          <span className="section-label">未入场</span>
-          <h1>{summary.reason ?? "回测窗口内未满足入场条件"}</h1>
-          <p>
-            窗口 {result.window.start} → {result.window.end}
-            ，期间未出现「筑底基本成立 + 右侧触发」，按纪律空仓等待。
-          </p>
+          <span className="section-label">首仓未成交</span>
+          <h1>{summary.reason ?? "手动决策日首仓未成交"}</h1>
+          <p>决策窗口 {result.window.start} → {result.window.end}</p>
         </section>
       )}
     </>
@@ -164,9 +161,9 @@ function BacktestResult({ result }: { result: PyramidBacktestResponse }) {
 function SummaryCard({ result }: { result: PyramidBacktestResponse }) {
   const s = result.summary;
   const conclusion = !s.entered
-    ? "未入场（纪律空仓）"
+    ? "首仓未成交"
     : s.stop_loss_triggered
-      ? "右侧判断失效，止损清仓退出"
+      ? "支撑失效，止损清仓退出"
       : s.negative_cost
         ? "底仓已做成负成本"
         : s.trim_started
@@ -253,15 +250,12 @@ function EntryCard({ result }: { result: PyramidBacktestResponse }) {
       <span className="section-label">入场与锚点</span>
       <div className="pyramid-entry-grid">
         <div>
-          信号日 <strong>{entry.signal_date ?? "—"}</strong>
-          <small>
-            {entry.tier_label ?? ""} · 右侧触发{" "}
-            {(entry.right_green ?? []).join("、") || "—"}
-          </small>
+          手动决策日 <strong>{entry.decision_date ?? "—"}</strong>
+          <small>用户选择日期，系统不判断买点</small>
         </div>
         <div>
           入场价 <strong>{entry.fill_price ?? "—"}</strong>
-          <small>信号次日开盘成交</small>
+          <small>决策日次一交易日开盘成交</small>
         </div>
         <div>
           目标价 <strong>{entry.target?.price ?? "—"}</strong>

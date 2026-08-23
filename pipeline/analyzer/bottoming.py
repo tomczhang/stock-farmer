@@ -61,17 +61,17 @@ _TIER_META: dict[str, dict[str, str]] = {
     "base_forming": {
         "label": "筑底基本成立",
         "icon": "🟡⭐",
-        "action": "筑底迹象已具备，等待右侧触发信号确认后再考虑出手，不要抢跑",
+        "action": "筑底迹象已具备，继续观察支撑稳定性与三迹象是否保持",
     },
     "base_ready": {
-        "label": "筑底成立·等待右侧出手点",
+        "label": "筑底成立",
         "icon": "🟢",
-        "action": "三迹象齐备，洗盘基本干净，等待右侧触发（如放量站上 MA20）出现出手点",
+        "action": "三迹象齐备，洗盘结构较完整；继续跟踪支撑是否保持",
     },
     "trend_running": {
         "label": "趋势运行中",
         "icon": "📈",
-        "action": "已在上升趋势中，非本框架的筑底买点；如需参与请用趋势跟随 / 回调策略",
+        "action": "当前处于上升趋势中，筑底框架不适用；请按趋势或回调框架另行研究",
     },
 }
 
@@ -94,7 +94,7 @@ class BottomingVerdict:
     tier_label: str
     icon: str
     action: str
-    next_trigger: str
+    next_observation: str
     cleanliness: float  # 洗盘干净度 0-1（结构强度语义）
     cleanliness_pct: int
     signs: list[BottomingSign]
@@ -320,11 +320,11 @@ def _resolve_tier(signs: list[BottomingSign]) -> str:
     return "still_falling"
 
 
-def _default_next_trigger(tier: str, signs: list[BottomingSign]) -> str:
+def _default_next_observation(tier: str, signs: list[BottomingSign]) -> str:
     if tier in ("base_forming", "base_ready"):
-        return "等待右侧触发：放量站上 MA20 / 放量反包 / 回踩支撑不破"
+        return "观察支撑区是否继续守住，以及三项筑底迹象能否维持"
     if tier == "trend_running":
-        return "等待出现回调筑底后，本框架才会再给筑底判读信号"
+        return "观察趋势是否保持；出现回调后再重新评估筑底结构"
     pending = [s for s in signs if s.state != "clear"]
     if pending:
         closest = max(pending, key=lambda s: s.score)
@@ -376,7 +376,7 @@ def compute_bottoming(
         tier_label=meta["label"],
         icon=meta["icon"],
         action=meta["action"],
-        next_trigger=_default_next_trigger(tier, signs),
+        next_observation=_default_next_observation(tier, signs),
         cleanliness=cleanliness,
         cleanliness_pct=int(round(cleanliness * 100)),
         signs=signs,

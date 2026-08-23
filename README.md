@@ -2,6 +2,8 @@
 
 港美股 PE-TTM 历史分位观察工具：输入一个 ticker，看当前 PE 处在自己历史区间的哪一格，帮你判断"现在贵不贵"。零月成本、零运维、全栈跑在 Cloudflare 免费层 + GitHub Actions 上。
 
+> 本 README 重点介绍 PE 产品线。仓库还包含：① 筑底三迹象结构诊断与严格 as-of 证伪镜；② 用户手动选择决策日的金字塔纪律推演（系统不判断买点）；③ 独立 Portfolio 资产管理应用。完整架构见 [`docs/PROJECT_WIKI.md`](docs/PROJECT_WIKI.md)。旧版 5 个趋势触发信号体系已删除。
+
 <!-- TODO: 加入截图 -->
 
 ## 这是什么
@@ -12,11 +14,11 @@
 
 - 港美股价值投资者，需要快速判断目标标的"在自己的历史区间内贵不贵"
 - 不想为低频自用场景付每月 $50+ 的数据订阅
-- 接受"判断贵贱"级别的精度，不需要回测策略
+- 接受"判断贵贱"级别的精度；PE 数据本身不用于 Point-in-Time 回测
 
 **不适合**：
 
-- 想做交易回测（本工具用最新版财报、不还原 Point-in-Time）
+- 想用 PE 财务序列做交易回测（该产品用最新版财报、不还原 Point-in-Time）
 - A 股用户（请用理杏仁等成熟工具，本工具不覆盖）
 - 需要 intraday / 实时 PE（本工具一天一更，盘后批处理）
 
@@ -64,8 +66,11 @@
 stock-farmer/
 ├── pipeline/         # Python 离线流水线（数据抓取 + 计算 + 写入 D1）
 ├── api/              # Cloudflare Workers API（TypeScript，hono 框架）
-├── web/              # React + Vite + ECharts 前端
+├── web/              # React + Vite + ECharts（当前入口：筑底报告/纪律推演）
+├── portfolio/        # 独立 Node/Hono + SQLite 资产管理应用
+├── deploy/           # 筑底诊断/纪律推演 VPS Docker
 ├── db/               # D1 schema 与 seed 数据
+├── docs/              # 项目 Wiki
 ├── .github/          # GitHub Actions workflow（pipeline 定时调度）
 └── openspec/         # OpenSpec 变更与规范文档
 ```

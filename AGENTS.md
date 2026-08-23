@@ -4,18 +4,20 @@
 
 ## 项目是什么
 
-港美股股票分析工具（"价值观察站"），两条产品线：
+港美股股票分析与资产管理工具（"价值观察站"），三条产品线：
 
-1. **PE-TTM 历史分位观察站**（README/v1）：输入 ticker，看当前 PE 处在自身历史区间（5y/10y/上市以来）的哪一分位，判断"贵不贵"。用最新版财报、不还原 Point-in-Time，**不做交易回测**。
-2. **右侧交易趋势信号分析器**（当前主力）：基于自由量价框架计算右侧确认度 / 阶段 / 信号，输出趋势报告与历史复盘（"证伪镜"），辅助人工判断右侧买点是否成立。
+1. **PE-TTM 历史分位观察站**（README/v1）：输入 ticker，看当前 PE 处在自身历史区间（5y/10y/上市以来）的哪一分位。用最新版财报、不还原 Point-in-Time，**不做交易回测**。
+2. **筑底结构诊断与纪律推演**：基于缩量下跌、假破位收回、筹码稳定三迹象输出筑底档位、结构强度和严格 as-of 的历史“证伪镜”。金字塔模块由用户手动选择决策日，只推演仓位纪律，系统不判断买点。
+3. **Portfolio 资产管理**：独立 Node/Hono + SQLite 应用，管理多券商快照、账本、绩效、风险预算和加减仓计划。
 
-定位：零月成本、零运维，生产环境全跑在 Cloudflare 免费层 + GitHub Actions。
+部署边界：PE 产品运行在 Cloudflare 免费层 + GitHub Actions；筑底诊断与 Portfolio 分别使用独立 VPS Docker 栈。
 
 ## 架构总览
 
 ```
-GitHub Actions(cron 盘后) → Python pipeline(抓数/清洗/TTM拼接/分位/信号)
-  → Cloudflare D1(SQLite) → Cloudflare Workers API(TS/hono 薄层) → Cloudflare Pages 前端(React+Vite+ECharts)
+PE: GitHub Actions → Python pipeline → Cloudflare D1 → Workers API → Pages
+筑底: Python analyzer/server → React/Vite/ECharts → VPS Docker
+Portfolio: Node/Hono → SQLite → React/Vite/ECharts → VPS Docker
 ```
 
 - **离线计算** = `pipeline/`（Python，pandas/numpy）。
@@ -26,20 +28,20 @@ GitHub Actions(cron 盘后) → Python pipeline(抓数/清洗/TTM拼接/分位/�
 ## 目录速览
 
 - `pipeline/` 离线流水线
-  - `analyzer/` 右侧信号核心：`signals.py`(信号) · `phase.py`(阶段) · `report.py`(组装报告/历史复盘) · `narrative.py`(文案) · `renderer.py`(静态 HTML 报告) · `backtest.py`(as-of 复盘/回测)
+  - `analyzer/` 筑底结构核心：`signals.py`(6项证据) · `bottoming.py`(三迹象/档位) · `report.py`(报告) · `narrative.py`(文案) · `renderer.py`(静态 HTML) · `backtest.py`(as-of 证伪镜) · `pyramid.py`(手动决策日纪律推演)
   - `fetcher/` `data/` `compute/` `db/` 抓取 / 适配 / 计算 / 写库；`run.py` 离线入口；`analyze.py` 单票静态报告入口；`server.py` 本地 API；`tests/` pytest
 - `api/` Cloudflare Workers（`src/`，`wrangler.toml`，hono）
-- `web/` 前端（`src/components/`：PE 线 `PEHistoryChart`/`MetricsCards`/`WatchlistPanel`/`TimeRangeToggle`，右侧信号 `SignalTrendReport` 等；样式 `src/styles/global.css`）
+- `web/` 前端（PE 组件保留；当前入口为筑底报告 `SignalTrendReport` 与金字塔纪律推演；样式 `src/styles/global.css`）
 - `db/` D1 schema + seed；`pages/` 静态报告入口；`output/` 生成产物
 - `openspec/` OpenSpec SDD 变更与规范；`.claude/commands/opsx/` 配套命令
 
 ## 开发约定（重要）
 
-- **OpenSpec SDD 驱动**：先在 `openspec/changes/<name>/`（proposal.md / tasks.md / design.md / specs/）立项再写代码。用 `.claude/commands/opsx/*`（new/apply/continue/verify/archive/sync/ff/explore）推进。**优先复用现有信号、阶段、组件模式，不要另起炉灶。**
+- **OpenSpec SDD 驱动**：先在 `openspec/changes/<name>/`（proposal.md / tasks.md / design.md / specs/）立项再写代码。用 `.claude/commands/opsx/*`（new/apply/continue/verify/archive/sync/ff/explore）推进。**优先复用现有筑底迹象、证据和组件模式，不要另起炉灶。**
 - **HeroUI v3 的真实用法**：React 前端（`web/`）**未引入 HeroUI 组件库**（`web/src` 0 处引用），用的是 ECharts + 自定义 CSS（`web/src/styles/global.css`）。HeroUI v3 仅作为**设计 token**（配色等）出现在 `analyzer/renderer.py` 的静态 HTML 报告中。**若确需用 HeroUI 组件，务必先查文末文档块指向的 `./.heroui-docs/react` demos，不要凭记忆。**
 - **数据口径**：`PE = 复权 Close ÷ Σ最近4季复权 EPS`；EPS 优先 diluted、缺失回退 basic；TTM EPS ≤ 0 不入分位（UI 灰显）。
-- **历史复盘防未来函数**：as-of 模式必须以 as-of 日期截断，日线 / 指数环境 / 成交密集区 / quote 都要截断或显式标注不可用，**严防未来数据泄漏**。前瞻标签（后 5/10/20 日涨跌幅、最大涨幅/回撤）只用于证伪展示，**不得反向影响 as-of 的信号/阶段/文案计算**。
-- **语义红线**：总确认度 = **结构强度**，不代表胜率 / 概率 / 准确率；左侧 = 准备度、右侧 = 触发度。文案勿用"胜率/概率/准确率"措辞。
+- **历史复盘防未来函数**：as-of 模式必须以 as-of 日期截断，日线 / 指数环境 / 成交密集区 / quote 都要截断或显式标注不可用，**严防未来数据泄漏**。前瞻标签（后 5/10/20 日涨跌幅、最大涨幅/回撤）只用于证伪展示，**不得反向影响 as-of 的三迹象、档位或文案计算**。
+- **语义红线**：洗盘干净度 = **筑底结构强度**，不代表胜率 / 概率 / 准确率或买点。金字塔 as-of 是用户手动决策日，系统不得宣称自动识别入场时机。
 - **数据源**：`global-stock-data` skill（雅虎 / 东财 / 新浪 / 腾讯 / SEC EDGAR，5 个零密钥 HTTP 源）。测试环境下被 `tests/conftest.py` stub，必须显式 monkeypatch，禁止真实网络。
 
 ## 常用命令
@@ -48,7 +50,7 @@ GitHub Actions(cron 盘后) → Python pipeline(抓数/清洗/TTM拼接/分位/�
 
 ```bash
 pip install -r pipeline/requirements-dev.txt      # 安装依赖（含 pytest/responses）
-python -m pytest pipeline                          # 全量测试（含 analyzer 内联测试，~236 用例）
+python -m pytest pipeline                          # 全量测试（含 analyzer 内联测试；数量以输出为准）
 D1_DRY_RUN=1 python pipeline/run.py --ticker AAPL  # 离线回填 dry-run（只打印 SQL，不写 D1；亦可 --dry-run）
 cd pipeline && python analyze.py AAPL --output-dir <dir>   # 生成单票静态 HTML 报告
 python -m pipeline.server                          # 本地 API，默认 127.0.0.1:8765，demo: /api/signal-report/DEMO?demo=1

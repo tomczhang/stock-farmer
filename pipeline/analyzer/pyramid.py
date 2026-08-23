@@ -1,37 +1,22 @@
-"""金字塔交易回测推演引擎。
+"""金字塔纪律推演引擎。
 
-选任意标的 + 任意历史时点（as-of），逐日推演右侧纪律打法的完整账本：
-入场（筑底基本成立 + 右侧触发）→ 金字塔加仓（越涨越买越少）→
-停止买入红线（不追高）→ 倒金字塔减仓（先回本金、底仓做低/负成本）→
-止损退出（跌破入场支撑 = 右侧失效）。
+用户手动选择 as-of 决策日，系统于下一交易日开盘建立标准首仓，随后逐日推演：
+价格档位递减加仓 → 停止买入红线 → 倒金字塔减仓 → 支撑失效止损。
 
-防未来函数约定：
-- 入场判定逐日按截断数据重算筑底判读与右侧信号；
-- 所有决策在收盘后形成，次一交易日以开盘价成交；
-- 目标价 / 支撑锚只用入场信号日及之前的数据。
-
-输出为历史模拟账本，仅供研究复盘，不构成投资建议或收益承诺。
+本模块不判断买点，也不读取任何触发信号。支撑、目标和每个后续决策都只使用
+相应决策日及以前的数据；所有订单在收盘后形成、次一交易日开盘成交。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from .backtest import cutoff_daily, parse_as_of, resolve_effective_date
-from .bottoming import SIGN_EARLY_THRESHOLD, compute_bottoming
+from .bottoming import compute_bottoming
 from .signals import _calc_atr, compute_all_signals
-
-# 入场认可的右侧触发信号（复用 compute_all_signals 中全部 5 个右侧信号）
-RIGHT_TRIGGER_IDS = (
-    "above_ma", "volume_breakout", "support_retest_hold",
-    "macd_cross", "higher_low",
-)
-# 入场认可的筑底判读档位
-ENTRY_TIERS = ("base_forming", "base_ready")
 
 DISCLAIMER = "历史模拟，仅供研究复盘，不构成投资建议或收益承诺。"
 
@@ -57,15 +42,6 @@ class PyramidParams:
     window: int = 120                  # 回测窗口（交易日）
     target_fallback_pct: float = 0.20  # 无压力位时目标价回退涨幅
     target_min_space_pct: float = 0.08  # 目标价最小空间：更近的压力不作目标，否则梯度/红线无意义
-    # 强右侧通道（第二入场路径）：适配放量深 V 反转——筑底不达标但
-    # 右侧多信号强共振 + 假破位收回初现，允许减半仓位入场
-    strong_right_enabled: bool = True
-    strong_right_min_green: int = 3        # 右侧 5 信号中绿灯数门槛
-    strong_right_fraction: float = 0.5     # 首仓相对标准入场的折扣
-    # 强右侧紧止损：深 V 入场位常远高于底部支撑，若支撑距入场超阈值，
-    # 止损上收到入场价下方固定比例——小仓试探配试探性止损
-    strong_right_max_support_gap: float = 0.08  # 支撑距入场价超此比例时启用紧止损
-    strong_right_stop_pct: float = 0.07         # 紧止损：入场价下方比例
 
 
 def _is_hk(ticker: str) -> bool:
@@ -167,53 +143,6 @@ def _support_anchor(signals: list, entry_price: float) -> dict[str, Any]:
     return {"price": round(entry_price * 0.92, 4), "source": "entry_fallback"}
 
 
-# ---------- 入场判定 ----------
-
-def check_entry(day_df: pd.DataFrame, params: PyramidParams | None = None) -> dict[str, Any]:
-    """单日入场判定，两条路径：
-
-    1. bottoming（标准）：筑底判读 ≥ 基本成立 且 任一右侧触发信号绿灯；
-    2. strong_right（可选）：右侧 ≥N 个绿灯且假破位收回迹象 ≥ 初现，
-       适配未充分筑底的深 V 反转，仓位减半（strong_right_fraction）。
-    """
-    params = params or PyramidParams()
-    signals = compute_all_signals(day_df)
-    verdict = compute_bottoming(day_df, signals=signals)
-    trigger_green = [
-        s.id for s in signals
-        if s.id in RIGHT_TRIGGER_IDS and s.light == "green"
-    ]
-    right_green_all = [
-        s.id for s in signals if s.category == "right" and s.light == "green"
-    ]
-
-    mode: str | None = None
-    if verdict.tier in ENTRY_TIERS and trigger_green:
-        mode = "bottoming"
-    elif (
-        params.strong_right_enabled
-        and verdict.tier != "trend_running"
-        and len(right_green_all) >= params.strong_right_min_green
-    ):
-        fb_sign = next(
-            (s for s in getattr(verdict, "signs", []) if s.id == "false_break_recover"),
-            None,
-        )
-        if fb_sign is not None and fb_sign.score >= SIGN_EARLY_THRESHOLD:
-            mode = "strong_right"
-
-    return {
-        "ok": mode is not None,
-        "mode": mode,
-        "tier": verdict.tier,
-        "tier_label": verdict.tier_label,
-        "right_green": trigger_green,
-        "right_green_all": right_green_all,
-        "cleanliness_pct": verdict.cleanliness_pct,
-        "signals": signals,
-    }
-
-
 # ---------- 主推演 ----------
 
 def run_pyramid_backtest(
@@ -221,12 +150,8 @@ def run_pyramid_backtest(
     ticker: str,
     as_of: str,
     params: PyramidParams | None = None,
-    entry_checker=None,
 ) -> dict[str, Any]:
-    """逐日推演金字塔交易，返回 JSON 可序列化账本 payload。
-
-    `entry_checker` 仅供 demo / 测试注入确定性入场；缺省走真实判读链。
-    """
+    """从用户手动选择的 as-of 决策日开始推演金字塔纪律。"""
     params = params or PyramidParams()
     as_of_date = parse_as_of(as_of)
     effective = resolve_effective_date(df, as_of_date)
@@ -291,22 +216,10 @@ def run_pyramid_backtest(
             if order["action"] == "buy":
                 entered = True
                 entry_fill_price = price
-                # 入场成交后锚定目标价 / 支撑 / 加仓档（只用信号日及之前数据）
-                day_df = order["signal_df"]
+                # 入场成交后锚定目标价 / 支撑 / 加仓档（只用手动决策日及之前数据）
+                day_df = order["decision_df"]
                 target = _resistance_target(day_df, price, params)
                 support = _support_anchor(order["signals"], price)
-                # 强右侧紧止损：支撑距入场价过远时，止损上收到入场价下方固定比例
-                if order.get("mode") == "strong_right" and price > 0:
-                    gap = (price - float(support["price"])) / price
-                    if gap > params.strong_right_max_support_gap:
-                        tight = round(price * (1 - params.strong_right_stop_pct), 4)
-                        if tight > float(support["price"]):
-                            support = {
-                                "price": tight,
-                                "source": "strong_right_tight",
-                                "raw_price": float(support["price"]),
-                                "raw_source": support["source"],
-                            }
                 add_tiers.clear()
                 for k, ratio in enumerate(params.add_ratios[1:], start=1):
                     add_tiers.append({
@@ -349,41 +262,25 @@ def run_pyramid_backtest(
         date = labels[i]
 
         if not entered:
-            # 2a) 入场判定（逐日截断重算）
-            day_df = cutoff_daily(df, date)
-            entry = (
-                entry_checker(day_df) if entry_checker is not None
-                else check_entry(day_df, params)
-            )
-            if entry["ok"]:
-                mode = entry.get("mode") or "bottoming"
-                if mode == "strong_right":
-                    entry_cash = (
-                        params.budget * params.entry_fraction * params.strong_right_fraction
-                    )
-                    n_green = len(entry.get("right_green_all", []) or entry.get("right_green", []))
-                    reason = (
-                        f"右侧强共振（{n_green}个绿灯）+假破位收回，未充分筑底，"
-                        f"小仓建仓{params.entry_fraction * params.strong_right_fraction * 100:.0f}%"
-                    )
-                    mode_label = "强右侧通道（小仓）"
-                else:
-                    entry_cash = params.budget * params.entry_fraction
-                    reason = f"筑底基本成立且右侧触发，建仓{params.entry_fraction * 100:.0f}%"
-                    mode_label = "筑底成立入场"
+            # 2a) 用户选择的 as-of 是唯一决策日；不扫描或判断自动买点。
+            if i == start_idx:
+                decision_df = cutoff_daily(df, effective)
+                signals = compute_all_signals(decision_df)
+                verdict = compute_bottoming(decision_df, signals=signals)
                 entry_signal = {
-                    "signal_date": date,
-                    "mode": mode,
-                    "mode_label": mode_label,
-                    "tier": entry["tier"], "tier_label": entry["tier_label"],
-                    "right_green": entry["right_green"],
-                    "right_green_all": entry.get("right_green_all", entry["right_green"]),
-                    "cleanliness_pct": entry["cleanliness_pct"],
+                    "decision_date": effective,
+                    "mode": "manual",
+                    "mode_label": "手动决策日",
+                    "bottoming_tier": verdict.tier,
+                    "bottoming_tier_label": verdict.tier_label,
+                    "cleanliness_pct": verdict.cleanliness_pct,
                 }
                 orders.append({
-                    "action": "buy", "cash": entry_cash, "mode": mode,
-                    "reason": reason,
-                    "signal_df": day_df, "signals": entry["signals"],
+                    "action": "buy",
+                    "cash": entry_cash,
+                    "reason": f"手动选择决策日，建立标准首仓 {params.entry_fraction * 100:.0f}%",
+                    "decision_df": decision_df,
+                    "signals": signals,
                 })
         else:
             assert entry_fill_price is not None and target is not None and support is not None
@@ -397,7 +294,7 @@ def run_pyramid_backtest(
             if shares > 0 and close < support["price"] - buffer:
                 orders.append({
                     "action": "stop_loss", "shares": shares,
-                    "reason": f"收盘 {close:.2f} 有效跌破支撑 {support['price']:.2f}，右侧失效清仓",
+                    "reason": f"收盘 {close:.2f} 有效跌破支撑 {support['price']:.2f}，支撑失效清仓",
                 })
                 events.append({
                     "type": "stop_loss", "date": date, "price": close,
@@ -558,9 +455,9 @@ def _build_payload(
     }
     if not entered:
         if pending:
-            summary["reason"] = "入场信号在窗口最后一日形成，无次日开盘价，成交待执行"
+            summary["reason"] = "手动决策日为窗口最后一日，无次日开盘价，首仓待执行"
         else:
-            summary["reason"] = "回测窗口内未出现「筑底基本成立 + 右侧触发」入场条件"
+            summary["reason"] = "标准首仓资金不足一手/一股，未能成交"
 
     return {
         "ticker": ticker.upper(),
@@ -581,7 +478,9 @@ def _build_payload(
         "summary": summary,
         "verdict_context": entry_signal,
         "chart_data": {"klines": _kline_records(klines)},
+        "schema_version": 2,
         "assumptions": [
+            "as-of 由用户手动选择，系统不判断买点",
             "决策于收盘后形成，次一交易日开盘价成交",
             f"双边手续费 {params.fee_rate*100:.2f}%",
             "港股按一手取整，美股按整股取整",
@@ -622,11 +521,6 @@ def _params_payload(params: PyramidParams) -> dict[str, Any]:
         "hk_lot": params.hk_lot,
         "window": params.window,
         "target_fallback_pct": params.target_fallback_pct,
-        "strong_right_enabled": params.strong_right_enabled,
-        "strong_right_min_green": params.strong_right_min_green,
-        "strong_right_fraction": params.strong_right_fraction,
-        "strong_right_max_support_gap": params.strong_right_max_support_gap,
-        "strong_right_stop_pct": params.strong_right_stop_pct,
     }
 
 
@@ -657,11 +551,7 @@ def build_pyramid_backtest(
 
 
 def build_demo_pyramid_backtest(ticker: str = "DEMO") -> dict[str, Any]:
-    """确定性演示剧本：入场→三档加仓→红线→三批减仓→负成本底仓。
-
-    用确定性 K 线 + 注入式入场判定驱动真实推演引擎，保证账本逻辑与
-    生产路径完全一致，供前端开发调试与 server demo。
-    """
+    """确定性手动决策日演示：首仓→加仓→红线→减仓。"""
     path = [
         (100.0, 100.0), (100.0, 100.0),
         (100.0, 102.0), (102.0, 105.6), (105.0, 106.0),
@@ -680,23 +570,6 @@ def build_demo_pyramid_backtest(ticker: str = "DEMO") -> dict[str, Any]:
     df = pd.DataFrame(rows)
 
     first_date = str(dates[0])
-
-    def demo_entry(day_df: pd.DataFrame) -> dict[str, Any]:
-        d = str(day_df["date"].iloc[-1]).split()[0]
-        signals = [
-            # 仅供支撑锚使用的最小信号集
-            SimpleNamespace(
-                id="false_breakdown",
-                data={"active_support": {"low": 94.2, "high": 96.8, "strength": 0.72}},
-            ),
-        ]
-        return {
-            "ok": d == first_date,
-            "tier": "base_forming", "tier_label": "筑底基本成立",
-            "right_green": ["above_ma"], "cleanliness_pct": 66,
-            "signals": signals,
-        }
-
-    payload = run_pyramid_backtest(df, ticker, first_date, entry_checker=demo_entry)
+    payload = run_pyramid_backtest(df, ticker, first_date)
     payload["demo"] = True
     return payload

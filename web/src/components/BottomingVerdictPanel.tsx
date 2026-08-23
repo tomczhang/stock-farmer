@@ -47,8 +47,8 @@ export function BottomingVerdictPanel({ bottoming }: BottomingVerdictPanelProps)
       </div>
 
       <div className="bottoming-next">
-        <span className="section-label">下一步</span>
-        <strong>{bottoming.next_trigger}</strong>
+        <span className="section-label">下一项观察</span>
+        <strong>{bottoming.next_observation}</strong>
       </div>
     </section>
   );

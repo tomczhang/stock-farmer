@@ -9,25 +9,17 @@ import argparse
 import json
 import mimetypes
 import os
-import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pipeline.analyzer.backtest import BacktestError
-from pipeline.analyzer.entry_lab import build_entry_scan
-from pipeline.analyzer.entry_lab_renderer import render_entry_lab_html
 from pipeline.analyzer.pyramid import build_demo_pyramid_backtest, build_pyramid_backtest
 from pipeline.analyzer.report import build_demo_signal_report, build_signal_report
 
 
 _INVALID = object()  # sentinel：trend_window 解析失败
-
-# 入场标准实验室扫描结果缓存（ticker → payload）；扫描耗时分钟级，
-# 同 ticker 并发请求用锁串行，避免重复重算。
-_ENTRY_SCAN_CACHE: dict[str, dict] = {}
-_ENTRY_SCAN_LOCK = threading.Lock()
 
 
 class SignalReportHandler(BaseHTTPRequestHandler):
@@ -162,42 +154,6 @@ class SignalReportHandler(BaseHTTPRequestHandler):
             self._send_json(payload)
             return
 
-        prefix = "/api/entry-scan/"
-        if parsed.path.startswith(prefix):
-            ticker = unquote(parsed.path[len(prefix) :]).strip().upper()
-            if not ticker:
-                self._send_error(HTTPStatus.BAD_REQUEST, "missing_ticker", "ticker 不能为空")
-                return
-            params = parse_qs(parsed.query)
-            refresh = params.get("refresh", ["0"])[0] in {"1", "true", "yes"}
-            try:
-                with _ENTRY_SCAN_LOCK:
-                    if refresh or ticker not in _ENTRY_SCAN_CACHE:
-                        _ENTRY_SCAN_CACHE[ticker] = build_entry_scan(ticker)
-                    payload = _ENTRY_SCAN_CACHE[ticker]
-            except ValueError as exc:
-                self._send_error(HTTPStatus.BAD_REQUEST, "invalid_entry_scan", str(exc))
-                return
-            except Exception as exc:  # pragma: no cover - integration boundary
-                self._send_error(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    "entry_scan_failed",
-                    f"{type(exc).__name__}: {exc}",
-                )
-                return
-            self._send_json(payload)
-            return
-
-        if parsed.path == "/entry-lab":
-            body = render_entry_lab_html().encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
         if parsed.path.startswith("/api/"):
             self._send_error(HTTPStatus.NOT_FOUND, "not_found", "未找到 API 路由")
             return
@@ -269,9 +225,8 @@ def run(host: str = "127.0.0.1", port: int = 8765, static_dir: str | None = None
         print(f"Static dir: {SignalReportHandler.static_dir}")
     server = ThreadingHTTPServer((host, port), SignalReportHandler)
     print(f"Python API listening on http://{host}:{port}")
-    print("Signal report endpoint: /api/signal-report/DEMO?demo=1")
-    print("Pyramid backtest endpoint: /api/pyramid-backtest/DEMO?demo=1")
-    print(f"Entry lab (入场标准实验室): http://{host}:{port}/entry-lab")
+    print("Bottoming report endpoint: /api/signal-report/DEMO?demo=1")
+    print("Pyramid discipline endpoint: /api/pyramid-backtest/DEMO?demo=1")
     server.serve_forever()
 
 

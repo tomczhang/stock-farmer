@@ -100,7 +100,7 @@ function AppInner() {
           <span className="brand-mark">SF</span>
           <div>
             <strong>stock-farmer</strong>
-            <span>右侧趋势分析</span>
+            <span>筑底结构诊断</span>
           </div>
         </div>
 
@@ -112,7 +112,7 @@ function AppInner() {
             className={view === "signal" ? "active" : ""}
             onClick={() => setView("signal")}
           >
-            信号报告
+            筑底报告
           </button>
           <button
             type="button"

@@ -1,4 +1,4 @@
-"""CLI 入口：python analyze.py AAPL → 输出 HTML 诊断报告。"""
+"""CLI 入口：python analyze.py AAPL → 输出筑底结构 HTML 报告。"""
 from __future__ import annotations
 
 import os
@@ -9,14 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from analyzer.signals import compute_all_signals
-from analyzer.phase import determine_phase
 from analyzer.bottoming import compute_bottoming
 from analyzer.narrative import generate_narrative
 from analyzer.renderer import render_html
 from analyzer.backtest import (
     DEFAULT_TREND_WINDOW,
     AsOfOutOfRange,
-    build_right_trend,
+    build_bottoming_history,
     clamp_trend_window,
     cutoff_daily,
     historical_price_and_change,
@@ -171,14 +170,11 @@ def analyze(
     except Exception:
         index_df = None
 
-    # 计算信号
-    print("  计算信号...")
+    # 计算六项结构证据
+    print("  计算筑底结构证据...")
     signals = compute_all_signals(analysis_df, volume_profile=vp, index_df=index_df)
 
-    # 阶段判断
-    phase = determine_phase(signals, df=analysis_df)
-
-    # 筑底三迹象判读
+    # 筑底三迹象判读（唯一主结论）
     bottoming = compute_bottoming(analysis_df, signals=signals)
 
     # 生成综述
@@ -188,11 +184,11 @@ def analyze(
     else:
         price = quote.price if quote else (float(df["close"].iloc[-1]) if len(df) > 0 else None)
         change_pct = quote.change_pct if quote else None
-    narrative = generate_narrative(ticker, name, signals, phase, verdict=bottoming)
+    narrative = generate_narrative(ticker, name, signals, bottoming)
 
-    # 右侧趋势序列（证伪镜）+ 历史元数据
-    print("  构建右侧趋势序列...")
-    right_trend = build_right_trend(
+    # 筑底历史序列（证伪镜）+ 历史元数据
+    print("  构建筑底历史序列...")
+    bottoming_history = build_bottoming_history(
         df, effective_date=effective_date, window=trend_window, index_df=index_df,
     )
     report_context = build_report_context(
@@ -220,10 +216,10 @@ def analyze(
 
     # 渲染 HTML
     html = render_html(
-        ticker, name, price, change_pct, signals, phase, narrative,
+        ticker, name, price, change_pct, signals, narrative,
         chart_data=chart_data,
         report_context=report_context,
-        right_trend=right_trend,
+        bottoming_history=bottoming_history,
         bottoming=bottoming,
     )
 
@@ -243,13 +239,13 @@ def analyze(
 
 def main() -> int:
     import argparse
-    parser = argparse.ArgumentParser(description="股票信号分析")
+    parser = argparse.ArgumentParser(description="股票筑底结构分析")
     parser.add_argument("ticker", help="股票代码（如 AAPL、0700.HK）")
     parser.add_argument("--output-dir", help="输出目录（默认 pipeline/output/）")
     parser.add_argument("--as-of", dest="as_of", help="历史复盘日期 YYYY-MM-DD（默认当前分析）")
     parser.add_argument(
         "--trend-window", dest="trend_window", type=int, default=DEFAULT_TREND_WINDOW,
-        help=f"右侧趋势序列窗口（默认 {DEFAULT_TREND_WINDOW}）",
+        help=f"筑底历史序列窗口（默认 {DEFAULT_TREND_WINDOW}）",
     )
     args = parser.parse_args()
 
