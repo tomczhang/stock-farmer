@@ -109,6 +109,8 @@
 ,
   {"ticker": "0700.HK", "date": "20260828", "file": "0700.HK_20260828.html"}
 ,
+  {"ticker": "0700.HK", "date": "20260829", "file": "0700.HK_20260829.html"}
+,
   {"ticker": "9992.HK", "date": "20260601", "file": "9992.HK_20260601.html"}
 ,
   {"ticker": "AAPL", "date": "20260616", "file": "AAPL_20260616.html"}
@@ -219,6 +221,8 @@
 ,
   {"ticker": "AAPL", "date": "20260828", "file": "AAPL_20260828.html"}
 ,
+  {"ticker": "AAPL", "date": "20260829", "file": "AAPL_20260829.html"}
+,
   {"ticker": "AMZN", "date": "20260616", "file": "AMZN_20260616.html"}
 ,
   {"ticker": "AMZN", "date": "20260617", "file": "AMZN_20260617.html"}
@@ -326,6 +330,8 @@
   {"ticker": "AMZN", "date": "20260827", "file": "AMZN_20260827.html"}
 ,
   {"ticker": "AMZN", "date": "20260828", "file": "AMZN_20260828.html"}
+,
+  {"ticker": "AMZN", "date": "20260829", "file": "AMZN_20260829.html"}
 ,
   {"ticker": "BRK.B", "date": "20260616", "file": "BRK.B_20260616.html"}
 ,
@@ -435,6 +441,8 @@
 ,
   {"ticker": "BRK.B", "date": "20260828", "file": "BRK.B_20260828.html"}
 ,
+  {"ticker": "BRK.B", "date": "20260829", "file": "BRK.B_20260829.html"}
+,
   {"ticker": "GOOGL", "date": "20260616", "file": "GOOGL_20260616.html"}
 ,
   {"ticker": "GOOGL", "date": "20260617", "file": "GOOGL_20260617.html"}
@@ -542,6 +550,8 @@
   {"ticker": "GOOGL", "date": "20260827", "file": "GOOGL_20260827.html"}
 ,
   {"ticker": "GOOGL", "date": "20260828", "file": "GOOGL_20260828.html"}
+,
+  {"ticker": "GOOGL", "date": "20260829", "file": "GOOGL_20260829.html"}
 ,
   {"ticker": "META", "date": "20260616", "file": "META_20260616.html"}
 ,
@@ -651,6 +661,8 @@
 ,
   {"ticker": "META", "date": "20260828", "file": "META_20260828.html"}
 ,
+  {"ticker": "META", "date": "20260829", "file": "META_20260829.html"}
+,
   {"ticker": "MSFT", "date": "20260616", "file": "MSFT_20260616.html"}
 ,
   {"ticker": "MSFT", "date": "20260617", "file": "MSFT_20260617.html"}
@@ -758,6 +770,8 @@
   {"ticker": "MSFT", "date": "20260827", "file": "MSFT_20260827.html"}
 ,
   {"ticker": "MSFT", "date": "20260828", "file": "MSFT_20260828.html"}
+,
+  {"ticker": "MSFT", "date": "20260829", "file": "MSFT_20260829.html"}
 ,
   {"ticker": "NVDA", "date": "20260616", "file": "NVDA_20260616.html"}
 ,
@@ -867,6 +881,8 @@
 ,
   {"ticker": "NVDA", "date": "20260828", "file": "NVDA_20260828.html"}
 ,
+  {"ticker": "NVDA", "date": "20260829", "file": "NVDA_20260829.html"}
+,
   {"ticker": "TSLA", "date": "20260616", "file": "TSLA_20260616.html"}
 ,
   {"ticker": "TSLA", "date": "20260617", "file": "TSLA_20260617.html"}
@@ -974,6 +990,8 @@
   {"ticker": "TSLA", "date": "20260827", "file": "TSLA_20260827.html"}
 ,
   {"ticker": "TSLA", "date": "20260828", "file": "TSLA_20260828.html"}
+,
+  {"ticker": "TSLA", "date": "20260829", "file": "TSLA_20260829.html"}
 ,
   {"ticker": "TSM", "date": "20260616", "file": "TSM_20260616.html"}
 ,
@@ -1083,6 +1101,8 @@
 ,
   {"ticker": "TSM", "date": "20260828", "file": "TSM_20260828.html"}
 ,
+  {"ticker": "TSM", "date": "20260829", "file": "TSM_20260829.html"}
+,
   {"ticker": "UNH", "date": "20260616", "file": "UNH_20260616.html"}
 ,
   {"ticker": "UNH", "date": "20260617", "file": "UNH_20260617.html"}
@@ -1190,4 +1210,6 @@
   {"ticker": "UNH", "date": "20260827", "file": "UNH_20260827.html"}
 ,
   {"ticker": "UNH", "date": "20260828", "file": "UNH_20260828.html"}
+,
+  {"ticker": "UNH", "date": "20260829", "file": "UNH_20260829.html"}
 ]
