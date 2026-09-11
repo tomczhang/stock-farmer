@@ -129,6 +129,8 @@
 ,
   {"ticker": "0700.HK", "date": "20260910", "file": "0700.HK_20260910.html"}
 ,
+  {"ticker": "0700.HK", "date": "20260911", "file": "0700.HK_20260911.html"}
+,
   {"ticker": "9992.HK", "date": "20260601", "file": "9992.HK_20260601.html"}
 ,
   {"ticker": "AAPL", "date": "20260616", "file": "AAPL_20260616.html"}
